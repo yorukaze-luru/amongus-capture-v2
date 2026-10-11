@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AmongUsCapture v2 - Self-Hosted Dedicated Client</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo-area">
+        <div class="pulse-icon"><img src="/icon.png" alt="Logo" class="app-logo-img"></div>
+        <div class="title-group">
+          <h1>AmongUsCapture <span class="badge-v2">v2 Next-Gen</span></h1>
+          <p class="subtitle">専用クライアント • 超軽量メモリ ~7MB • セルフホスト Discord Bot</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="btn-refresh-offsets" class="btn btn-secondary btn-sm" title="Fetch latest offsets">
+          🔄 オフセット更新
+        </button>
+      </div>
+    </header>
+
+    <!-- Status Overview -->
+    <section class="card status-overview">
+      <div class="card-header">
+        <h2>ステータス概要</h2>
+        <span id="overall-status-badge" class="badge badge-warning">STANDBY</span>
+      </div>
+      <div class="status-grid">
+        <div class="status-tile">
+          <div class="tile-label">Among Us 検出</div>
+          <div id="game-hook-status" class="tile-value text-danger">● 未検出</div>
+          <div id="game-hash" class="tile-sub">プロセス待機中...</div>
+        </div>
+        <div class="status-tile">
+          <div class="tile-label">ゲーム状態</div>
+          <div id="game-state-text" class="tile-value text-info">UNKNOWN</div>
+          <div class="tile-sub">進行状態を自動監視中</div>
+        </div>
+        <div class="status-tile">
+          <div class="tile-label">Discord Bot 接続</div>
+          <div id="bot-status-text" class="tile-value text-danger">● 未接続</div>
+          <div id="bot-sub-text" class="tile-sub">Tokenを入力して起動</div>
+        </div>
+        <div class="status-tile">
+          <div class="tile-label">リソース</div>
+          <div id="resource-stats" class="tile-value text-success">~7.2 MB</div>
+          <div class="tile-sub">超軽量スタンドアロン</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Self-Hosted Discord Bot Panel -->
+    <section class="card bot-setup-card">
+      <div class="card-header">
+        <h2>セルフホスト Discord Bot 設定</h2>
+        <span class="badge-hint">外部サーバー不要！Bot Tokenを入れるだけで自動ミュートが即座に動作します</span>
+      </div>
+
+      <div class="bot-setup-grid">
+        <div class="form-group">
+          <label for="bot-token">Discord Bot Token (<a href="https://discord.com/developers/applications" target="_blank" class="link-ext">Developer Portal で取得 ↗</a>)</label>
+          <div class="input-with-btn">
+            <input type="password" id="bot-token" class="form-input" placeholder="MTAxMjM0NTY3ODkwMTIzNDU2Nw.xxxxxx.xxxxxx">
+            <button type="button" id="btn-toggle-token" class="btn btn-secondary btn-sm">👁️</button>
+            <button type="button" id="btn-bot-toggle" class="btn btn-primary">Bot起動</button>
+          </div>
+        </div>
+
+        <div class="vc-select-row">
+          <div class="form-group flex-1">
+            <label for="select-guild">🌐 対象サーバー (Guild)</label>
+            <select id="select-guild" class="form-input" disabled>
+              <option value="">Botを起動してサーバーを取得...</option>
+            </select>
+          </div>
+          <div class="form-group flex-1">
+            <label for="select-vc">🔊 対象ボイスチャンネル (VC)</label>
+            <select id="select-vc" class="form-input" disabled>
+              <option value="">サーバーを選択してください...</option>
+            </select>
+          </div>
+          <div class="form-group flex-1">
+            <label for="select-status-channel">💬 ステータス通知チャンネル (Text)</label>
+            <select id="select-status-channel" class="form-input" disabled>
+              <option value="">(通知なし / サーバー選択)</option>
+            </select>
+          </div>
+          <div class="form-group align-end">
+            <button type="button" id="btn-apply-vc" class="btn btn-primary" disabled>チャンネル設定反映</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- VC Members List & Mapping -->
+      <div class="vc-section">
+        <div class="vc-header">
+          <div class="vc-title-group">
+            <h3>🔊 ボイスチャンネル参加者 (<span id="vc-count">0</span>名)</h3>
+            <span class="sub-hint">※各メンバーのプルダウンからゲーム内の色を選択してリンク登録できます（「🚫 登録解除・不参加」で解除）</span>
+          </div>
+          <div class="vc-tools">
+            <button id="btn-unmute-all" class="btn btn-secondary btn-sm" title="VC全員のミュートを即座に解除">🔊 全員ミュート解除</button>
+            <button id="btn-refresh-vc" class="btn btn-secondary btn-sm">🔄 再読込</button>
+          </div>
+        </div>
+        <div id="vc-members-list" class="vc-grid">
+          <div class="empty-state">ボイスチャンネルを選択すると参加者が表示されます</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Live Log Console -->
+    <section class="card logs-card">
+      <div class="card-header">
+        <h2>リアルタイム ログ</h2>
+        <button id="btn-clear-logs" class="btn btn-text btn-sm">クリア</button>
+      </div>
+      <div id="log-console" class="log-console">
+        <div class="log-line log-info">[Init] AmongUsCapture v2 専用クライアント起動完了。</div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div>AmongUsCapture v2 (Dedicated Client) • Built-in Self-Hosted Discord Bot Engine</div>
+    </footer>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

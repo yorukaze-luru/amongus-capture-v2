@@ -1,0 +1,37 @@
+# Binaries & Executables
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.zip
+*.tar.gz
+
+# Test binaries
+*.test
+*.out
+
+# Go build & cache
+/build/
+/bin/
+
+# Temporary & Log files
+*.log
+tmp/
+temp/
+offsets_latest.json
+
+# Local configurations & secrets
+settings.json
+*.env
+*.local
+
+# IDEs & Editors
+.vscode/
+.idea/
+*.suo
+*.user
+*.swp
+*~
+.DS_Store
+Thumbs.db
