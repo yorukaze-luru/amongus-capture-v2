@@ -18,6 +18,7 @@ import (
 	"amongus-capture-v2/pkg/config"
 	"amongus-capture-v2/pkg/memory"
 	"amongus-capture-v2/pkg/metrics"
+	"amongus-capture-v2/pkg/version"
 	"github.com/gorilla/websocket"
 	"golang.org/x/sys/windows"
 )
@@ -67,6 +68,7 @@ type StatePayload struct {
 	PlayerMappings map[string]string   `json:"playerMappings"`
 	LastMatchResult *memory.MatchResult `json:"lastMatchResult"`
 	Metrics         metrics.ProcessMetrics `json:"metrics"`
+	Version         string              `json:"version"`
 }
 
 // WSMessage is the message envelope for UI WebSocket
@@ -251,6 +253,7 @@ func (ws *WebServer) buildCurrentStatePayload() StatePayload {
 		PlayerMappings:  cfg.PlayerMappings,
 		LastMatchResult: lastMatch,
 		Metrics:         metrics.GetMonitor().Sample(),
+		Version:         version.CurrentVersion,
 	}
 }
 

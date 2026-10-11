@@ -17,6 +17,7 @@ const state = {
 };
 
 const els = {
+  appVersion: document.getElementById('app-version'),
   overallBadge: document.getElementById('overall-status-badge'),
   gameHook: document.getElementById('game-hook-status'),
   gameHash: document.getElementById('game-hash'),
@@ -324,6 +325,9 @@ function handleBackendMessage(data) {
 }
 
 function updateUI(s) {
+  if (s.version && els.appVersion) {
+    els.appVersion.textContent = s.version;
+  }
   state.hooked = s.hooked;
   state.gameState = s.gameState;
   state.lobbyCode = s.lobbyCode;

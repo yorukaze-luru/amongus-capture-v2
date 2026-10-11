@@ -20,13 +20,14 @@ import (
 	"amongus-capture-v2/pkg/bot"
 	"amongus-capture-v2/pkg/config"
 	"amongus-capture-v2/pkg/memory"
+	"amongus-capture-v2/pkg/version"
 	"amongus-capture-v2/pkg/web"
 	"github.com/jchv/go-webview2"
 	"golang.org/x/sys/windows"
 )
 
 const (
-	AppVersion = "2.2.0-SelfHosted"
+	AppVersion = version.CurrentVersion
 	Banner     = `
 =====================================================================
    🚀 AmongUsCapture v2 (Dedicated Client & Self-Hosted Discord Bot)
@@ -172,7 +173,7 @@ func main() {
 				AutoFocus: true,
 				DataPath:  wvUserData,
 				WindowOptions: webview2.WindowOptions{
-					Title:  "AmongUsCapture v2 - Dedicated Client",
+					Title:  fmt.Sprintf("AmongUsCapture %s - Dedicated Client", version.CurrentVersion),
 					Width:  uint(winWidth),
 					Height: uint(winHeight),
 					IconId: 0,
