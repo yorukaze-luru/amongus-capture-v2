@@ -18,7 +18,11 @@ const state = {
 
 const els = {
   appVersion: document.getElementById('app-version'),
+  releasePillLink: document.getElementById('release-pill-link'),
+  releaseLabelText: document.getElementById('release-label-text'),
   releaseVersionPill: document.getElementById('release-version-pill'),
+  statusVersionBadge: document.getElementById('status-version-badge'),
+  statusVersionLabel: document.getElementById('status-version-label'),
   statusVersionText: document.getElementById('status-version-text'),
   footerVersion: document.getElementById('footer-version'),
   overallBadge: document.getElementById('overall-status-badge'),
@@ -328,11 +332,69 @@ function handleBackendMessage(data) {
 }
 
 function updateUI(s) {
-  if (s.version) {
-    if (els.appVersion) els.appVersion.textContent = s.version;
-    if (els.releaseVersionPill) els.releaseVersionPill.textContent = s.version;
-    if (els.statusVersionText) els.statusVersionText.textContent = s.version;
-    if (els.footerVersion) els.footerVersion.textContent = s.version;
+  // Version & New Release Detection
+  if (s.hasUpdate && s.latestVersion) {
+    // 1. Header Pill: 赤文字で「ニューリリース」と最新バージョン、リンク先を最新に差し替え
+    if (els.releasePillLink) {
+      els.releasePillLink.classList.add('new-release');
+      if (s.releaseUrl) els.releasePillLink.href = s.releaseUrl;
+      els.releasePillLink.title = `最新バージョン ${s.latestVersion} が利用可能です！クリックしてダウンロード`;
+    }
+    if (els.releaseLabelText) {
+      els.releaseLabelText.textContent = 'ニューリリース:';
+    }
+    if (els.releaseVersionPill) {
+      els.releaseVersionPill.textContent = s.latestVersion;
+    }
+
+    // 2. Status Overview Card Header
+    if (els.statusVersionBadge) {
+      els.statusVersionBadge.classList.add('new-release');
+    }
+    if (els.statusVersionLabel) {
+      els.statusVersionLabel.textContent = 'ニューリリース:';
+    }
+    if (els.statusVersionText) {
+      els.statusVersionText.textContent = s.latestVersion;
+    }
+
+    // 3. Footer
+    if (els.footerVersion) {
+      els.footerVersion.className = 'text-red-alert';
+      els.footerVersion.textContent = `${s.version || 'v2.2.8'} (最新: ${s.latestVersion})`;
+    }
+  } else {
+    // Regular / Up-to-date state
+    if (els.releasePillLink) {
+      els.releasePillLink.classList.remove('new-release');
+      els.releasePillLink.href = 'https://github.com/yorukaze-luru/amongus-capture-v2/releases';
+      els.releasePillLink.title = 'GitHub リリースページ・更新履歴を開く';
+    }
+    if (els.releaseLabelText) {
+      els.releaseLabelText.textContent = 'リリースバージョン:';
+    }
+    if (els.releaseVersionPill && s.version) {
+      els.releaseVersionPill.textContent = s.version;
+    }
+
+    if (els.statusVersionBadge) {
+      els.statusVersionBadge.classList.remove('new-release');
+    }
+    if (els.statusVersionLabel) {
+      els.statusVersionLabel.textContent = 'リリースバージョン:';
+    }
+    if (els.statusVersionText && s.version) {
+      els.statusVersionText.textContent = s.version;
+    }
+
+    if (els.footerVersion && s.version) {
+      els.footerVersion.className = '';
+      els.footerVersion.textContent = s.version;
+    }
+  }
+
+  if (s.version && els.appVersion) {
+    els.appVersion.textContent = s.version;
   }
   state.hooked = s.hooked;
   state.gameState = s.gameState;

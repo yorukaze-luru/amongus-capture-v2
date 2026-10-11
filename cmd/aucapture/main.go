@@ -83,6 +83,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// 0. Check for newer releases on GitHub in background
+	version.CheckStartupUpdate()
+
 	// 1. Initialize Configuration
 	cfgMgr := config.NewConfigManager()
 	globalCfgMgr = cfgMgr

@@ -69,6 +69,9 @@ type StatePayload struct {
 	LastMatchResult *memory.MatchResult `json:"lastMatchResult"`
 	Metrics         metrics.ProcessMetrics `json:"metrics"`
 	Version         string              `json:"version"`
+	HasUpdate       bool                `json:"hasUpdate"`
+	LatestVersion   string              `json:"latestVersion"`
+	ReleaseURL      string              `json:"releaseUrl"`
 }
 
 // WSMessage is the message envelope for UI WebSocket
@@ -235,6 +238,8 @@ func (ws *WebServer) buildCurrentStatePayload() StatePayload {
 		lastMatch = ws.gr.GetLastMatchResult()
 	}
 
+	upInfo := version.GetUpdateInfo()
+
 	return StatePayload{
 		Hooked:          hooked,
 		ProcessName:     procName,
@@ -254,6 +259,9 @@ func (ws *WebServer) buildCurrentStatePayload() StatePayload {
 		LastMatchResult: lastMatch,
 		Metrics:         metrics.GetMonitor().Sample(),
 		Version:         version.CurrentVersion,
+		HasUpdate:       upInfo.HasUpdate,
+		LatestVersion:   upInfo.LatestVersion,
+		ReleaseURL:      upInfo.ReleaseURL,
 	}
 }
 

@@ -156,6 +156,58 @@ body {
   font-weight: 500;
 }
 
+/* New Release Alert Styles: Red text & glowing badge */
+.release-pill-link.new-release {
+  background: rgba(239, 68, 68, 0.18);
+  border: 1px solid rgba(239, 68, 68, 0.6);
+  color: #ef4444;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.35);
+  animation: pulse-red-glow 2s infinite ease-in-out;
+}
+
+.release-pill-link.new-release:hover {
+  background: rgba(239, 68, 68, 0.32);
+  border-color: #f87171;
+  color: #ff6b6b;
+  transform: translateY(-1px);
+}
+
+.release-pill-link.new-release .pill-dot {
+  color: #ef4444;
+}
+
+.release-pill-link.new-release .pill-label {
+  color: #ef4444;
+  font-weight: 800;
+}
+
+.release-pill-link.new-release .pill-ver {
+  color: #ef4444;
+  font-weight: 800;
+  text-decoration: underline;
+}
+
+.badge-hint-ver.new-release {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.5);
+  font-weight: 700;
+}
+
+.text-red-alert {
+  color: #ef4444 !important;
+  font-weight: 700;
+}
+
+@keyframes pulse-red-glow {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(239, 68, 68, 0.5);
+  }
+}
+
 /* Cards */
 .card {
   background: var(--bg-card);
