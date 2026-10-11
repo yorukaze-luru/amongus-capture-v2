@@ -18,6 +18,9 @@ const state = {
 
 const els = {
   appVersion: document.getElementById('app-version'),
+  releaseVersionPill: document.getElementById('release-version-pill'),
+  statusVersionText: document.getElementById('status-version-text'),
+  footerVersion: document.getElementById('footer-version'),
   overallBadge: document.getElementById('overall-status-badge'),
   gameHook: document.getElementById('game-hook-status'),
   gameHash: document.getElementById('game-hash'),
@@ -325,8 +328,11 @@ function handleBackendMessage(data) {
 }
 
 function updateUI(s) {
-  if (s.version && els.appVersion) {
-    els.appVersion.textContent = s.version;
+  if (s.version) {
+    if (els.appVersion) els.appVersion.textContent = s.version;
+    if (els.releaseVersionPill) els.releaseVersionPill.textContent = s.version;
+    if (els.statusVersionText) els.statusVersionText.textContent = s.version;
+    if (els.footerVersion) els.footerVersion.textContent = s.version;
   }
   state.hooked = s.hooked;
   state.gameState = s.gameState;
