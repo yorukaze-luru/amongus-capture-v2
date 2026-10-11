@@ -82,9 +82,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 0. Clean legacy storage once to reset previous cache/state as requested
-	config.CleanLegacyStorage()
-
 	// 1. Initialize Configuration
 	cfgMgr := config.NewConfigManager()
 	globalCfgMgr = cfgMgr
@@ -158,12 +155,12 @@ func main() {
 			// Dedicated Native Windows Desktop GUI via WebView2 (Ran directly on Main Thread)
 			time.Sleep(100 * time.Millisecond)
 
-			winWidth := 820
-			winHeight := 640
-			if cfg.WindowWidth >= 400 {
+			winWidth := 1040
+			winHeight := 780
+			if cfg.WindowWidth >= 500 {
 				winWidth = cfg.WindowWidth
 			}
-			if cfg.WindowHeight >= 300 {
+			if cfg.WindowHeight >= 400 {
 				winHeight = cfg.WindowHeight
 			}
 
@@ -205,14 +202,14 @@ func main() {
 					cleanupAndExit()
 				})
 
-				// Active Safety Watcher: Check if HWND still exists every 100ms
+				// Active Safety Watcher: Check if HWND still exists every 200ms
 				go func() {
 					modUser32 := windows.NewLazySystemDLL("user32.dll")
 					procIsWindow := modUser32.NewProc("IsWindow")
 
 					time.Sleep(500 * time.Millisecond)
 					for {
-						time.Sleep(100 * time.Millisecond)
+						time.Sleep(200 * time.Millisecond)
 						ret, _, _ := procIsWindow.Call(hwnd)
 						if ret == 0 {
 							log.Println("[Lifecycle] Window destroyed detected by watcher. Exiting process now...")
@@ -223,7 +220,6 @@ func main() {
 					}
 				}()
 
-				w.SetSize(winWidth, winHeight, webview2.HintNone)
 				w.Navigate(dashboardURL)
 				w.Run() // Blocks on main thread until window is closed
 				w.Destroy()
@@ -264,12 +260,9 @@ func saveWindowPlacement() {
 		return
 	}
 	user32 := windows.NewLazySystemDLL("user32.dll")
+	procGetWindowRect := user32.NewProc("GetWindowRect")
 	procGetWindowPlacement := user32.NewProc("GetWindowPlacement")
 	procIsZoomed := user32.NewProc("IsZoomed")
-
-	var wp windowPlacementStruct
-	wp.Length = uint32(unsafe.Sizeof(wp))
-	ret, _, _ := procGetWindowPlacement.Call(globalHWND, uintptr(unsafe.Pointer(&wp)))
 
 	isMaximized := false
 	maxRet, _, _ := procIsZoomed.Call(globalHWND)
@@ -277,23 +270,44 @@ func saveWindowPlacement() {
 		isMaximized = true
 	}
 
-	if ret != 0 {
-		r := wp.RcNormalPosition
-		w := int(r.Right - r.Left)
-		h := int(r.Bottom - r.Top)
-		x := int(r.Left)
-		y := int(r.Top)
+	var x, y, w, h int
 
-		if w >= 400 && h >= 300 {
-			_ = globalCfgMgr.Update(func(c *config.AppConfig) {
-				c.WindowX = x
-				c.WindowY = y
-				c.WindowWidth = w
-				c.WindowHeight = h
-				c.WindowMaximized = isMaximized
-			})
-			_ = globalCfgMgr.Save()
+	if !isMaximized {
+		var r rectStruct
+		ret, _, _ := procGetWindowRect.Call(globalHWND, uintptr(unsafe.Pointer(&r)))
+		if ret != 0 {
+			w = int(r.Right - r.Left)
+			h = int(r.Bottom - r.Top)
+			x = int(r.Left)
+			y = int(r.Top)
 		}
+	} else {
+		var wp windowPlacementStruct
+		wp.Length = uint32(unsafe.Sizeof(wp))
+		ret, _, _ := procGetWindowPlacement.Call(globalHWND, uintptr(unsafe.Pointer(&wp)))
+		if ret != 0 {
+			norm := wp.RcNormalPosition
+			w = int(norm.Right - norm.Left)
+			h = int(norm.Bottom - norm.Top)
+			x = int(norm.Left)
+			y = int(norm.Top)
+		}
+	}
+
+	if w >= 400 && h >= 300 {
+		_ = globalCfgMgr.Update(func(c *config.AppConfig) {
+			c.WindowX = x
+			c.WindowY = y
+			c.WindowWidth = w
+			c.WindowHeight = h
+			c.WindowMaximized = isMaximized
+		})
+		_ = globalCfgMgr.Save()
+	} else if isMaximized {
+		_ = globalCfgMgr.Update(func(c *config.AppConfig) {
+			c.WindowMaximized = true
+		})
+		_ = globalCfgMgr.Save()
 	}
 }
 

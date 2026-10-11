@@ -120,6 +120,20 @@ els.btnToggleToken.addEventListener('click', () => {
   els.btnToggleToken.textContent = type === 'password' ? '👁️' : '🔒';
 });
 
+// Auto-save Bot Token whenever changed or focus lost
+if (els.botTokenInput) {
+  const saveTokenToConfig = () => {
+    const token = els.botTokenInput.value.trim();
+    fetch('/api/config/save-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    }).catch(() => {});
+  };
+  els.botTokenInput.addEventListener('change', saveTokenToConfig);
+  els.botTokenInput.addEventListener('blur', saveTokenToConfig);
+}
+
 // Bot Start/Stop
 els.btnBotToggle.addEventListener('click', () => {
   if (state.botConnected) {
@@ -361,7 +375,7 @@ function updateUI(s) {
     els.overallBadge.className = 'badge badge-warning';
   }
 
-  if (s.botToken && !els.botTokenInput.value) {
+  if (s.botToken && (!els.botTokenInput.value || document.activeElement !== els.botTokenInput)) {
     els.botTokenInput.value = s.botToken;
   }
 

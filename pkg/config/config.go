@@ -51,8 +51,8 @@ func DefaultConfig() AppConfig {
 		DarkMode:         true,
 		WindowX:          -1,
 		WindowY:          -1,
-		WindowWidth:      820,
-		WindowHeight:     640,
+		WindowWidth:      1040,
+		WindowHeight:     780,
 		WindowMaximized:  false,
 		DiscordBotToken:  "",
 		DiscordGuildID:   "",
@@ -62,12 +62,11 @@ func DefaultConfig() AppConfig {
 	}
 }
 
-// CleanLegacyStorage clears previously stored cache and legacy configs if requested
+// CleanLegacyStorage clears old temporary cache files if any (preserves settings.json)
 func CleanLegacyStorage() {
 	appData := os.Getenv("APPDATA")
 	if appData != "" {
 		dir := filepath.Join(appData, "AmongUsCaptureV2")
-		_ = os.Remove(filepath.Join(dir, "settings.json"))
 		_ = os.Remove(filepath.Join(dir, "offsets_cache.json"))
 		_ = os.Remove(filepath.Join(dir, "offsets_custom.json"))
 	}
@@ -106,11 +105,11 @@ func (cm *ConfigManager) Load() {
 		// Migrate older versions if needed
 		if loaded.ConfigVersion < CurrentConfigVersion {
 			loaded.ConfigVersion = CurrentConfigVersion
-			if loaded.WindowWidth < 400 {
-				loaded.WindowWidth = 820
+			if loaded.WindowWidth < 500 {
+				loaded.WindowWidth = 1040
 			}
-			if loaded.WindowHeight < 300 {
-				loaded.WindowHeight = 640
+			if loaded.WindowHeight < 400 {
+				loaded.WindowHeight = 780
 			}
 		}
 		if loaded.PlayerMappings == nil {

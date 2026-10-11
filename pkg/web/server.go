@@ -131,6 +131,7 @@ func (ws *WebServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/link/remove", ws.handleLinkRemove)
 	mux.HandleFunc("/api/player/add", ws.handlePlayerAdd)
 	mux.HandleFunc("/api/player/remove", ws.handlePlayerRemove)
+	mux.HandleFunc("/api/config/save-token", ws.handleSaveToken)
 	mux.HandleFunc("/api/app/quit", ws.handleAppQuit)
 
 	server := &http.Server{
@@ -717,6 +718,27 @@ func (ws *WebServer) OnVoiceMembersUpdated(members []bot.VoiceMember) {
 
 func (ws *WebServer) OnBotLog(message, level string) {
 	ws.BroadcastLog(message, level)
+}
+
+func (ws *WebServer) handleSaveToken(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+	token := strings.TrimSpace(req.Token)
+	_ = ws.cfgMgr.Update(func(c *config.AppConfig) {
+		c.DiscordBotToken = token
+	})
+	_ = ws.cfgMgr.Save()
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 }
 
 func (ws *WebServer) handleAppQuit(w http.ResponseWriter, r *http.Request) {
