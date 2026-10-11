@@ -1043,6 +1043,29 @@ func (b *DiscordBot) cleanAndSyncSlashCommands(s *discordgo.Session, targetGuild
 
 // buildColorSelectComponents constructs the interactive select menu placed directly below the status embed
 func (b *DiscordBot) buildColorSelectComponents() []discordgo.MessageComponent {
+	var currentGameState memory.GameState = memory.StateUnknown
+	if b.gr != nil {
+		currentGameState = b.gr.GetCurrentState()
+	}
+
+	isLobby := (currentGameState == memory.StateLobby)
+
+	placeholder := "🎨 あなたのゲーム内カラーを選択（または登録解除）"
+	if !isLobby {
+		switch currentGameState {
+		case memory.StateTasks:
+			placeholder = "🔒 タスク進行中: ロビー待機中のみカラー選択が可能です"
+		case memory.StateDiscussion:
+			placeholder = "🔒 緊急会議中: ロビー待機中のみカラー選択が可能です"
+		case memory.StateMenu:
+			placeholder = "🔒 メニュー画面: ロビー入室後にカラー選択が可能です"
+		case memory.StateEnded:
+			placeholder = "🔒 ゲーム終了: ロビー復帰後にカラー選択が可能です"
+		default:
+			placeholder = "🔒 ロビー待機中のみカラー選択が可能です"
+		}
+	}
+
 	options := []discordgo.SelectMenuOption{
 		{
 			Label:       "🚫 登録解除・不参加（観戦）",
@@ -1092,8 +1115,9 @@ func (b *DiscordBot) buildColorSelectComponents() []discordgo.MessageComponent {
 				discordgo.SelectMenu{
 					MenuType:    discordgo.StringSelectMenu,
 					CustomID:    "select_player_color",
-					Placeholder: "🎨 あなたのゲーム内カラーを選択（または登録解除）",
+					Placeholder: placeholder,
 					Options:     options,
+					Disabled:    !isLobby,
 				},
 			},
 		},
@@ -1122,6 +1146,21 @@ func (b *DiscordBot) handleInteractionCreate(s *discordgo.Session, i *discordgo.
 	}
 
 	if userID == "" || len(data.Values) == 0 {
+		return
+	}
+
+	var currentGameState memory.GameState = memory.StateUnknown
+	if b.gr != nil {
+		currentGameState = b.gr.GetCurrentState()
+	}
+	if currentGameState != memory.StateLobby {
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "⚠️ カラーの紐付け・変更は **ロビー待機中 (LOBBY)** にのみ可能です。（メニュー画面やゲーム進行中は選択できません）",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
 		return
 	}
 
