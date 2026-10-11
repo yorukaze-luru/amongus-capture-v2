@@ -134,6 +134,7 @@ func (b *DiscordBot) Start(ctx context.Context, token, guildID, voiceCID, status
 	// Event Handlers
 	dg.AddHandler(b.handleVoiceStateUpdate)
 	dg.AddHandler(b.handleReady)
+	dg.AddHandler(b.handleInteractionCreate)
 
 	err = dg.Open()
 	if err != nil {
@@ -164,9 +165,10 @@ func (b *DiscordBot) Start(ctx context.Context, token, guildID, voiceCID, status
 	b.notifyStatus(true, username, "")
 	b.notifyLog(fmt.Sprintf("Discord Bot (%s) がオンラインになりました！", username), "success")
 
-	// Initial Voice channel refresh and Status Embed post
+	// Initial Voice channel refresh, Slash command cleanup/sync, and Status Embed post
 	go func() {
 		time.Sleep(500 * time.Millisecond)
+		b.cleanAndSyncSlashCommands(dg, guildID)
 		b.RefreshVoiceMembers()
 		b.UpdateStatusEmbed()
 	}()
@@ -315,6 +317,7 @@ func (b *DiscordBot) SetChannels(guildID, voiceCID, statusCID string) {
 
 	b.RefreshVoiceMembers()
 	b.UpdateStatusEmbed()
+	go b.cleanAndSyncSlashCommands(b.session, guildID)
 }
 
 // RefreshVoiceMembers queries voice channel members and dispatches to listeners
@@ -986,3 +989,168 @@ func (b *DiscordBot) notifyLog(message, level string) {
 		l.OnBotLog(message, level)
 	}
 }
+
+// cleanAndSyncSlashCommands wipes duplicate global commands and bulk overwrites guild commands to guarantee single instances
+func (b *DiscordBot) cleanAndSyncSlashCommands(s *discordgo.Session, targetGuildID string) {
+	if s == nil || s.State == nil || s.State.User == nil {
+		return
+	}
+	appID := s.State.User.ID
+	if appID == "" {
+		return
+	}
+
+	// 1. Delete ALL global slash commands to eliminate the duplicate instance
+	globalCmds, err := s.ApplicationCommands(appID, "")
+	if err == nil {
+		for _, cmd := range globalCmds {
+			_ = s.ApplicationCommandDelete(appID, "", cmd.ID)
+			log.Printf("[DiscordBot] Deleted duplicate global slash command: /%s", cmd.Name)
+		}
+	}
+
+	// 2. Define standard slash command set
+	commands := []*discordgo.ApplicationCommand{
+		{
+			Name:        "link",
+			Description: "Among Us の色と自分の Discord アカウントを紐付けます",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "color",
+					Description: "ゲーム内のプレイヤーカラーを選択",
+					Required:    true,
+					Choices:     getColorChoices(),
+				},
+			},
+		},
+		{
+			Name:        "unlink",
+			Description: "色の紐付けを解除します（不参加・観戦扱いとなり自動ミュート対象外になります）",
+		},
+		{
+			Name:        "status",
+			Description: "現在のゲーム進行状況と参加者一覧を表示します",
+		},
+		{
+			Name:        "unmute",
+			Description: "ボイスチャンネル参加者全員のミュートを強制解除します",
+		},
+	}
+
+	// 3. Collect target guilds
+	guildIDs := make(map[string]bool)
+	if targetGuildID != "" {
+		guildIDs[targetGuildID] = true
+	}
+	if s.State != nil {
+		for _, g := range s.State.Guilds {
+			guildIDs[g.ID] = true
+		}
+	}
+
+	// 4. Bulk overwrite commands for each guild (atomically eliminates duplicates!)
+	for gID := range guildIDs {
+		_, err := s.ApplicationCommandBulkOverwrite(appID, gID, commands)
+		if err != nil {
+			log.Printf("[DiscordBot] Failed to sync slash commands for guild %s: %v", gID, err)
+		} else {
+			log.Printf("[DiscordBot] Synchronized clean slash commands for guild %s", gID)
+		}
+	}
+}
+
+func getColorChoices() []*discordgo.ApplicationCommandOptionChoice {
+	colorNames := []string{
+		"Red", "Blue", "Green", "Pink", "Orange", "Yellow",
+		"Black", "White", "Purple", "Brown", "Cyan", "Lime",
+		"Maroon", "Rose", "Banana", "Gray", "Tan", "Sunset",
+	}
+	var choices []*discordgo.ApplicationCommandOptionChoice
+	for _, c := range colorNames {
+		pColor := memory.ParseColorByName(c)
+		choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
+			Name:  fmt.Sprintf("%s %s", pColor.Emoji(), c),
+			Value: c,
+		})
+	}
+	return choices
+}
+
+func (b *DiscordBot) handleInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if i.Type != discordgo.InteractionApplicationCommand {
+		return
+	}
+
+	data := i.ApplicationCommandData()
+	var respText string
+	var embed *discordgo.MessageEmbed
+
+	userID := ""
+	if i.Member != nil && i.Member.User != nil {
+		userID = i.Member.User.ID
+	} else if i.User != nil {
+		userID = i.User.ID
+	}
+
+	switch data.Name {
+	case "link":
+		colorArg := ""
+		if len(data.Options) > 0 {
+			colorArg = data.Options[0].StringValue()
+		}
+		if colorArg != "" && userID != "" {
+			_ = b.cfgMgr.Update(func(c *config.AppConfig) {
+				for k, uid := range c.PlayerMappings {
+					if uid == userID {
+						delete(c.PlayerMappings, k)
+					}
+				}
+				c.PlayerMappings[colorArg] = userID
+			})
+			b.RefreshVoiceMembers()
+			b.UpdateStatusEmbed()
+			pColor := memory.ParseColorByName(colorArg)
+			respText = fmt.Sprintf("🔗 %s **%s** と紐付けました！", pColor.Emoji(), colorArg)
+			b.notifyLog(fmt.Sprintf("スラッシュコマンド実行: /link %s (<@%s>)", colorArg, userID), "success")
+		} else {
+			respText = "❌ 色の指定が無効です。"
+		}
+
+	case "unlink":
+		if userID != "" {
+			_ = b.cfgMgr.Update(func(c *config.AppConfig) {
+				for k, uid := range c.PlayerMappings {
+					if uid == userID {
+						delete(c.PlayerMappings, k)
+					}
+				}
+			})
+			b.RefreshVoiceMembers()
+			b.UpdateStatusEmbed()
+			respText = "🚫 紐付けを解除しました（不参加・観戦扱いになります）。"
+			b.notifyLog(fmt.Sprintf("スラッシュコマンド実行: /unlink (<@%s>)", userID), "warn")
+		}
+
+	case "status":
+		embed = b.buildRealtimeStatusEmbed()
+
+	case "unmute":
+		b.UnmuteAll()
+		respText = "🔊 全員のミュートを解除しました！"
+		b.notifyLog(fmt.Sprintf("スラッシュコマンド実行: /unmute (<@%s>)", userID), "success")
+	}
+
+	resp := &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: respText,
+		},
+	}
+	if embed != nil {
+		resp.Data.Embeds = []*discordgo.MessageEmbed{embed}
+	}
+
+	_ = s.InteractionRespond(i.Interaction, resp)
+}
+
