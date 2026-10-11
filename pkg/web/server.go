@@ -394,7 +394,7 @@ func (ws *WebServer) handleBotStart(w http.ResponseWriter, r *http.Request) {
 		voiceCID = cfg.DiscordVoiceCID
 	}
 	statusCID := strings.TrimSpace(req.StatusCID)
-	if statusCID == "" {
+	if statusCID == "" && req.GuildID == "" {
 		statusCID = cfg.DiscordStatusCID
 	}
 
@@ -462,6 +462,7 @@ func (ws *WebServer) handleBotSetChannel(w http.ResponseWriter, r *http.Request)
 	if ws.discordBot != nil {
 		ws.discordBot.SetChannels(req.GuildID, req.VoiceCID, req.StatusCID)
 	}
+	ws.BroadcastStateUpdate()
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 }

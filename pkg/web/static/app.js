@@ -175,7 +175,7 @@ els.btnBotToggle.addEventListener('click', () => {
     }
     const guildId = els.selectGuild.value || state.selectedGuildId;
     const voiceCId = els.selectVC.value || state.selectedVoiceCId;
-    const statusCId = els.selectStatusChannel.value || state.selectedStatusCId;
+    const statusCId = els.selectStatusChannel.disabled ? state.selectedStatusCId : els.selectStatusChannel.value;
 
     els.btnBotToggle.disabled = true;
     els.btnBotToggle.textContent = '起動中...';
@@ -278,6 +278,10 @@ els.btnApplyVC.addEventListener('click', () => {
     alert('サーバーを選択してください。');
     return;
   }
+  state.selectedGuildId = guildId;
+  state.selectedVoiceCId = voiceCId;
+  state.selectedStatusCId = statusCId;
+
   fetch('/api/bot/set-channel', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

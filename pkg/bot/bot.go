@@ -96,6 +96,8 @@ func (b *DiscordBot) AddListener(l BotListener) {
 
 // Start launches the Discord bot with given token and connects to Gateway
 func (b *DiscordBot) Start(ctx context.Context, token, guildID, voiceCID, statusCID string) error {
+	b.DeleteStatusEmbed()
+
 	b.mu.Lock()
 	if b.connected && b.session != nil {
 		_ = b.session.Close()
@@ -299,25 +301,48 @@ func (b *DiscordBot) GetGuilds() ([]GuildInfo, error) {
 
 // SetChannels updates the target guild, voice channel, and status text channel
 func (b *DiscordBot) SetChannels(guildID, voiceCID, statusCID string) {
+	newGuildID := strings.TrimSpace(guildID)
+	newVoiceCID := strings.TrimSpace(voiceCID)
+	newStatusCID := strings.TrimSpace(statusCID)
+
+	b.statusMu.Lock()
 	b.mu.Lock()
-	b.guildID = strings.TrimSpace(guildID)
-	b.voiceCID = strings.TrimSpace(voiceCID)
+	s := b.session
 	oldStatusCID := b.statusCID
-	b.statusCID = strings.TrimSpace(statusCID)
-	if oldStatusCID != b.statusCID {
+	oldStatusMsgID := b.statusMsgID
+
+	b.guildID = newGuildID
+	b.voiceCID = newVoiceCID
+
+	channelChanged := (oldStatusCID != newStatusCID)
+	if channelChanged {
+		b.statusCID = newStatusCID
 		b.statusMsgID = "" // Reset message ID when channel changes
 	}
 	b.mu.Unlock()
 
+	// If status channel changed and we had an active status message in the old channel, delete it
+	if channelChanged && s != nil && oldStatusCID != "" && oldStatusMsgID != "" {
+		err := s.ChannelMessageDelete(oldStatusCID, oldStatusMsgID)
+		if err != nil {
+			log.Printf("[DiscordBot] Failed to delete status embed %s from channel %s: %v", oldStatusMsgID, oldStatusCID, err)
+		} else {
+			log.Printf("[DiscordBot] Deleted status embed %s from old channel %s (changed to %q)", oldStatusMsgID, oldStatusCID, newStatusCID)
+		}
+	}
+	b.statusMu.Unlock()
+
 	_ = b.cfgMgr.Update(func(c *config.AppConfig) {
-		c.DiscordGuildID = guildID
-		c.DiscordVoiceCID = voiceCID
-		c.DiscordStatusCID = statusCID
+		c.DiscordGuildID = newGuildID
+		c.DiscordVoiceCID = newVoiceCID
+		c.DiscordStatusCID = newStatusCID
 	})
 
 	b.RefreshVoiceMembers()
-	b.UpdateStatusEmbed()
-	go b.cleanAndSyncSlashCommands(b.session, guildID)
+	if newStatusCID != "" {
+		b.UpdateStatusEmbed()
+	}
+	go b.cleanAndSyncSlashCommands(s, newGuildID)
 }
 
 // RefreshVoiceMembers queries voice channel members and dispatches to listeners
