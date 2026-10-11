@@ -43,6 +43,11 @@ const els = {
 
   // Unmute
   btnUnmuteAll: document.getElementById('btn-unmute-all'),
+
+  // Resource Tile
+  resourceTile: document.getElementById('resource-tile'),
+  resourceStats: document.getElementById('resource-stats'),
+  resourceSub: document.getElementById('resource-sub'),
 };
 
 const colorMap = {
@@ -377,6 +382,30 @@ function updateUI(s) {
 
   if (s.botToken && (!els.botTokenInput.value || document.activeElement !== els.botTokenInput)) {
     els.botTokenInput.value = s.botToken;
+  }
+
+  // Real-time Resource Usage (RAM & CPU)
+  if (s.metrics) {
+    const wsMB = s.metrics.working_set_mb || 0;
+    const cpu = s.metrics.cpu_percent || 0;
+    const goroutines = s.metrics.goroutines || 0;
+
+    if (els.resourceStats) {
+      els.resourceStats.textContent = `${wsMB.toFixed(1)} MB`;
+      if (cpu >= 15.0) {
+        els.resourceStats.className = 'tile-value text-warning';
+      } else {
+        els.resourceStats.className = 'tile-value text-success';
+      }
+    }
+
+    if (els.resourceSub) {
+      els.resourceSub.textContent = `CPU: ${cpu.toFixed(1)}% • Go: ${goroutines}`;
+    }
+
+    if (els.resourceTile) {
+      els.resourceTile.title = `物理メモリ (Working Set): ${wsMB.toFixed(1)} MB\nGo ヒープ割り当て: ${(s.metrics.alloc_mb || 0).toFixed(1)} MB\nCPU 使用率: ${cpu.toFixed(1)}%\nGoroutine 数: ${goroutines}`;
+    }
   }
 
   // Render VC Members with direct Color Link dropdowns

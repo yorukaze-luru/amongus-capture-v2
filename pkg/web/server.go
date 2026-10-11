@@ -17,6 +17,7 @@ import (
 	"amongus-capture-v2/pkg/bot"
 	"amongus-capture-v2/pkg/config"
 	"amongus-capture-v2/pkg/memory"
+	"amongus-capture-v2/pkg/metrics"
 	"github.com/gorilla/websocket"
 	"golang.org/x/sys/windows"
 )
@@ -65,6 +66,7 @@ type StatePayload struct {
 	VoiceMembers   []bot.VoiceMember   `json:"voiceMembers"`
 	PlayerMappings map[string]string   `json:"playerMappings"`
 	LastMatchResult *memory.MatchResult `json:"lastMatchResult"`
+	Metrics         metrics.ProcessMetrics `json:"metrics"`
 }
 
 // WSMessage is the message envelope for UI WebSocket
@@ -248,14 +250,31 @@ func (ws *WebServer) buildCurrentStatePayload() StatePayload {
 		VoiceMembers:    vMembers,
 		PlayerMappings:  cfg.PlayerMappings,
 		LastMatchResult: lastMatch,
+		Metrics:         metrics.GetMonitor().Sample(),
 	}
 }
 
 func (ws *WebServer) stateBroadcastWorker(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ticker.C:
+			// Periodically send state to refresh real-time resource metrics even when idle
+			payload := ws.buildCurrentStatePayload()
+			msg, err := json.Marshal(WSMessage{
+				Type:    "state_update",
+				Payload: payload,
+			})
+			if err == nil {
+				select {
+				case ws.broadcast <- msg:
+				default:
+				}
+			}
 		case <-ws.broadcastStateUpdateChan:
 			// Coalesce rapid bursts within 30ms (prevents UI flicker)
 			time.Sleep(30 * time.Millisecond)
