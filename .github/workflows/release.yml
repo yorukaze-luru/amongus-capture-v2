@@ -37,6 +37,7 @@ jobs:
           files: |
             AmongUsCapture-v2.exe
             AmongUsCapture-v2-windows-amd64.zip
+          body_path: RELEASE_NOTES.md
           generate_release_notes: true
           draft: false
           prerelease: false
