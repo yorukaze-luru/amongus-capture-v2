@@ -598,6 +598,9 @@ func (ws *WebServer) handleLinkRemove(w http.ResponseWriter, r *http.Request) {
 	ws.BroadcastLog("リンクを解除しました", "info")
 
 	if ws.discordBot != nil {
+		if req.UserID != "" {
+			_ = ws.discordBot.UnmuteUser(req.UserID)
+		}
 		ws.discordBot.RefreshVoiceMembers()
 		ws.discordBot.UpdateStatusEmbed()
 	}

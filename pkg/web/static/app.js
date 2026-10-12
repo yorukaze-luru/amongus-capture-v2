@@ -517,20 +517,19 @@ function renderVoiceMembers(members) {
     let linkedColor = '';
     if (state.playerMappings) {
       for (const [col, uid] of Object.entries(state.playerMappings)) {
-        if (uid === m.userId) {
+        if (uid === m.userId && colorMap[col]) {
           linkedColor = col;
           break;
         }
       }
     }
-    if (!linkedColor && m.matchedName && colorMap[m.matchedName]) {
-      linkedColor = m.matchedName;
-    }
 
     const cInfo = linkedColor ? getColorInfo(linkedColor) : null;
-    const accentHex = cInfo ? cInfo.hex : (m.matchedColor || '');
+    const accentHex = cInfo ? cInfo.hex : '';
     if (accentHex) {
       chip.style.borderLeftColor = accentHex;
+    } else {
+      chip.style.borderLeftColor = 'transparent';
     }
 
     const avatar = document.createElement('div');
@@ -588,7 +587,19 @@ function renderVoiceMembers(members) {
       const userName = m.displayName || m.username;
 
       if (!val) {
-        // Unlink user
+        // Unlink user: immediately update local state
+        if (state.playerMappings) {
+          for (const [colKey, uid] of Object.entries(state.playerMappings)) {
+            if (uid === m.userId) {
+              delete state.playerMappings[colKey];
+            }
+          }
+        }
+        m.matchedName = '';
+        m.matchedColor = '';
+        lastRenderedVCJson = '';
+        renderVoiceMembers(state.voiceMembers);
+
         fetch('/api/link/remove', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -600,7 +611,20 @@ function renderVoiceMembers(members) {
           })
           .catch((err) => addLog(`リンク解除エラー: ${err}`, 'error'));
       } else {
-        // Set link
+        // Set link: immediately update local state
+        if (state.playerMappings) {
+          for (const [colKey, uid] of Object.entries(state.playerMappings)) {
+            if (uid === m.userId) {
+              delete state.playerMappings[colKey];
+            }
+          }
+          delete state.playerMappings[val];
+          state.playerMappings[val] = m.userId;
+        }
+        m.matchedName = val;
+        lastRenderedVCJson = '';
+        renderVoiceMembers(state.voiceMembers);
+
         fetch('/api/link/set', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

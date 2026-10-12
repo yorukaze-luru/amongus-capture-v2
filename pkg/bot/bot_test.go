@@ -150,3 +150,32 @@ func TestRealtimeStatusEmbed_PlayerColorsFormat(t *testing.T) {
 		t.Errorf("expected formatted string for Blue, got: %s", field.Value)
 	}
 }
+
+func TestFindMatch_ExplicitOnly(t *testing.T) {
+	mappings := map[string]string{
+		"Red": "user_123",
+	}
+
+	players := []memory.PlayerInfo{
+		{
+			Name:  "Tanaka",
+			Color: memory.ColorRed,
+		},
+		{
+			Name:  "Sato",
+			Color: memory.ColorBlue,
+		},
+	}
+
+	// 1. Mapped user matches their mapped color
+	matchedName, matchedColor := findMatch("user_123", "Tanaka", "Tanaka", mappings, players)
+	if matchedName != "Red" || matchedColor != "#c51111" {
+		t.Errorf("expected Red, got %s (%s)", matchedName, matchedColor)
+	}
+
+	// 2. Unmapped user whose nickname is "Sato" must NOT be auto-matched to Blue!
+	unmappedName, unmappedColor := findMatch("user_unmapped_456", "Sato", "Sato", mappings, players)
+	if unmappedName != "" || unmappedColor != "" {
+		t.Errorf("expected unmapped user to return empty, got %s (%s)", unmappedName, unmappedColor)
+	}
+}

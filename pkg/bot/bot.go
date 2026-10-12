@@ -455,7 +455,7 @@ func (b *DiscordBot) RefreshVoiceMembers() {
 }
 
 func findMatch(userID, username, displayName string, mappings map[string]string, inGamePlayers []memory.PlayerInfo) (string, string) {
-	// 1. Check explicit manual mapping (by color or name)
+	// Check explicit manual mapping (by color or name)
 	for key, mappedUID := range mappings {
 		if mappedUID == userID {
 			cleanKey := strings.ToLower(strings.TrimSpace(key))
@@ -469,21 +469,6 @@ func findMatch(userID, username, displayName string, mappings map[string]string,
 				return pColor.String(), pColor.Hex()
 			}
 			return key, "#888888"
-		}
-	}
-
-	// 2. Auto-match by name / nickname similarity
-	cleanDisplay := strings.ToLower(strings.TrimSpace(displayName))
-	cleanUser := strings.ToLower(strings.TrimSpace(username))
-
-	for _, p := range inGamePlayers {
-		cleanGame := strings.ToLower(strings.TrimSpace(p.Name))
-		if cleanGame == "" {
-			continue
-		}
-		if cleanGame == cleanDisplay || cleanGame == cleanUser ||
-			strings.Contains(cleanDisplay, cleanGame) || strings.Contains(cleanGame, cleanDisplay) {
-			return p.Color.String(), p.Color.Hex()
 		}
 	}
 
@@ -1337,6 +1322,7 @@ func (b *DiscordBot) handleInteractionCreate(s *discordgo.Session, i *discordgo.
 				}
 			}
 		})
+		_ = b.UnmuteUser(userID)
 		respText = "🚫 色の紐付けを解除しました。（不参加・観戦扱いとなり自動ミュートの対象外になります）"
 		b.notifyLog(fmt.Sprintf("色リンク解除: %s (<@%s>)", userName, userID), "warn")
 	} else {
