@@ -119,7 +119,7 @@ amongus-capture-v2/
 ---
 
 ## 📬 連絡先
-- **開発・お問い合わせ**: 夜風るる（https://x.com/Yorukaze_LURU）
+- **開発・お問い合わせ**: 夜風るる（ https://x.com/Yorukaze_LURU ）
 
 ---
 
