@@ -18,7 +18,11 @@
 # Temporary & Log files
 *.log
 tmp/
-temp/
+# Local diagnostics and test tools
+cmd/logviewer/
+cmd/playerviewer/
+AmongUs-LogViewer.exe
+AmongUs-PlayerViewer.exe
 offsets_latest.json
 
 # Local configurations & secrets

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AmongUsCapture v2.2.12 - Dedicated Client</title>
+  <title>AmongUsCapture v2.2.13 - Dedicated Client</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -14,13 +14,13 @@
       <div class="logo-area">
         <div class="pulse-icon"><img src="/icon.png" alt="Logo" class="app-logo-img"></div>
         <div class="title-group">
-          <h1>AmongUsCapture <span class="badge-v2" id="app-version">v2.2.12</span></h1>
+          <h1>AmongUsCapture <span class="badge-v2" id="app-version">v2.2.13</span></h1>
           <p class="subtitle">専用クライアント • 超軽量設計 • セルフホスト Discord Bot</p>
         </div>
       </div>
       <div class="header-actions">
         <a href="https://github.com/yorukaze-luru/amongus-capture-v2/releases" target="_blank" class="release-pill-link" id="release-pill-link" title="GitHub リリースページ・更新履歴を開く">
-          <span class="pill-dot" id="release-pill-dot">●</span> <span id="release-label-text" class="pill-label">リリースバージョン:</span> <strong id="release-version-pill" class="pill-ver">v2.2.12</strong> <span id="release-arrow">↗</span>
+          <span class="pill-dot" id="release-pill-dot">●</span> <span id="release-label-text" class="pill-label">リリースバージョン:</span> <strong id="release-version-pill" class="pill-ver">v2.2.13</strong> <span id="release-arrow">↗</span>
         </a>
         <button id="btn-refresh-offsets" class="btn btn-secondary btn-sm" title="Fetch latest offsets">
           🔄 オフセット更新
@@ -33,7 +33,7 @@
       <div class="card-header">
         <div class="card-title-group">
           <h2>ステータス概要</h2>
-          <span class="badge-hint-ver" id="status-version-badge"><span id="status-version-label">リリースバージョン:</span> <strong id="status-version-text">v2.2.12</strong></span>
+          <span class="badge-hint-ver" id="status-version-badge"><span id="status-version-label">リリースバージョン:</span> <strong id="status-version-text">v2.2.13</strong></span>
         </div>
         <span id="overall-status-badge" class="badge badge-warning">STANDBY</span>
       </div>
@@ -58,6 +58,36 @@
           <div id="resource-stats" class="tile-value text-success">- MB</div>
           <div id="resource-sub" class="tile-sub">CPU -%</div>
         </div>
+      </div>
+    </section>
+
+    <!-- In-Game Players Status Card -->
+    <section class="card ingame-players-card">
+      <div class="card-header">
+        <div class="card-title-group">
+          <h2>🎮 ゲーム内プレイヤー状態 (<span id="ingame-player-count">0</span>名)</h2>
+          <span class="badge-hint">メモリからリアルタイム同期した生存/死亡・役職一覧</span>
+        </div>
+        <button id="btn-force-sync" class="btn btn-secondary btn-sm" title="ゲーム内情報を強制再同期">🔄 強制同期</button>
+      </div>
+      <div class="table-responsive">
+        <table class="player-table">
+          <thead>
+            <tr>
+              <th style="width: 50px;">ID</th>
+              <th style="width: 140px;">カラー</th>
+              <th>プレイヤー名</th>
+              <th style="width: 120px;">生存状態</th>
+              <th style="width: 90px;">接続</th>
+              <th style="width: 110px;">役職</th>
+            </tr>
+          </thead>
+          <tbody id="ingame-players-tbody">
+            <tr>
+              <td colspan="6" class="text-center empty-row">ロビーまたは試合に参加するとプレイヤーが表示されます</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </section>
 
@@ -134,7 +164,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-      <div>AmongUsCapture v2 • リリースバージョン <strong id="footer-version">v2.2.12</strong> • Built-in Self-Hosted Discord Bot</div>
+      <div>AmongUsCapture v2 • リリースバージョン <strong id="footer-version">v2.2.13</strong> • Built-in Self-Hosted Discord Bot</div>
     </footer>
   </div>
 

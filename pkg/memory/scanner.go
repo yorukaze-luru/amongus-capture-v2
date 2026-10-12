@@ -135,6 +135,8 @@ func (s *AOBScanner) ScanAllSignatures() ScannedPointers {
 			ParsePattern("GameData_2", "48 8B 05 ?? ?? ?? ?? 48 8B 88 ?? 00 00 00 48 8B 49 20", 3, 7),
 			ParsePattern("GameData_3", "48 8B 05 ?? ?? ?? ?? 48 85 C0 74 ?? 48 8B 80 ?? 00 00 00", 3, 7),
 			ParsePattern("GameData_4", "48 8B 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 85 C0", 3, 7),
+			ParsePattern("GameData_5", "48 8B 05 ?? ?? ?? ?? 48 8B 88 ?? 00 00 00 48 85 C9 74 ?? 48 8B 49 20", 3, 7),
+			ParsePattern("GameData_6", "48 8B 05 ?? ?? ?? ?? 48 8B 48 20 48 85 C9", 3, 7),
 		}
 		for _, p := range gameDataPatterns {
 			if addr, err := s.ScanPattern(p); err == nil && addr > s.base {
@@ -148,6 +150,8 @@ func (s *AOBScanner) ScanAllSignatures() ScannedPointers {
 			ParsePattern("Client_1", "48 8B 05 ?? ?? ?? ?? 48 8B 88 ?? 00 00 00 48 85 C9", 3, 7),
 			ParsePattern("Client_2", "48 8B 05 ?? ?? ?? ?? 48 85 C0 74 ?? 48 8B 88 ?? 00 00 00", 3, 7),
 			ParsePattern("Client_3", "48 8B 05 ?? ?? ?? ?? 48 85 C0 74 ?? 80 B8 ?? 00 00 00 00", 3, 7),
+			ParsePattern("Client_4", "48 8B 05 ?? ?? ?? ?? 48 85 C0 74 ?? 80 B8 ?? 00 00 00 01", 3, 7),
+			ParsePattern("Client_5", "48 8B 0D ?? ?? ?? ?? 48 85 C9 74 ?? 80 B9 ?? 00 00 00 00", 3, 7),
 		}
 		for _, p := range clientPatterns {
 			if addr, err := s.ScanPattern(p); err == nil && addr > s.base {
@@ -160,6 +164,9 @@ func (s *AOBScanner) ScanAllSignatures() ScannedPointers {
 		playerControlPatterns := []Pattern{
 			ParsePattern("PlayerControl_1", "48 8B 05 ?? ?? ?? ?? 48 8B 88 ?? 00 00 00 48 8B 01", 3, 7),
 			ParsePattern("PlayerControl_2", "48 8B 05 ?? ?? ?? ?? 48 85 C0 74 ?? 48 8B 40 20", 3, 7),
+			ParsePattern("PlayerControl_3", "48 8B 05 ?? ?? ?? ?? 48 8B 88 ?? 00 00 00 48 85 C9", 3, 7),
+			ParsePattern("PlayerControl_4", "48 8B 05 ?? ?? ?? ?? 48 85 C0 74 ?? 48 8B 88 ?? 00 00 00", 3, 7),
+			ParsePattern("PlayerControl_5", "48 8B 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 8B 88", 3, 7),
 		}
 		for _, p := range playerControlPatterns {
 			if addr, err := s.ScanPattern(p); err == nil && addr > s.base {
@@ -172,6 +179,7 @@ func (s *AOBScanner) ScanAllSignatures() ScannedPointers {
 		meetingPatterns := []Pattern{
 			ParsePattern("Meeting_1", "48 8B 05 ?? ?? ?? ?? 48 85 C0 74 ?? 48 8B 88 ?? 00 00 00", 3, 7),
 			ParsePattern("Meeting_2", "48 8B 05 ?? ?? ?? ?? 80 B8 ?? 00 00 00 00 74", 3, 7),
+			ParsePattern("Meeting_3", "48 8B 05 ?? ?? ?? ?? 48 85 C0 74 ?? 80 B8 ?? 00 00 00", 3, 7),
 		}
 		for _, p := range meetingPatterns {
 			if addr, err := s.ScanPattern(p); err == nil && addr > s.base {
@@ -222,6 +230,11 @@ func (s *AOBScanner) ResolveOffsetsDynamically(template *GameOffsets) (*GameOffs
 			resolved.MeetingHudPtr[0] = rva
 		}
 		resolved.MeetingHudOffset = rva
+	}
+
+	if sigs.PlayerControlClassPtr > s.base {
+		rva := int(sigs.PlayerControlClassPtr - s.base)
+		resolved.PlayerControlOffset = rva
 	}
 
 	return &resolved, nil

@@ -13,7 +13,8 @@ const (
 	StateLobby      GameState = 1
 	StateTasks      GameState = 2
 	StateDiscussion GameState = 3
-	StateEnded      GameState = 4
+	StateGameOver   GameState = 4
+	StateEnded      GameState = 4 // Alias for backwards compatibility
 	StateUnknown    GameState = 5
 )
 
@@ -27,10 +28,10 @@ func (s GameState) String() string {
 		return "TASKS"
 	case StateDiscussion:
 		return "DISCUSSION"
-	case StateEnded:
-		return "ENDED"
+	case StateGameOver:
+		return "GAME_OVER"
 	default:
-		return "UNKNOWN"
+		return "MENU" // Fallback so gameStateStr does not become UNKNOWN
 	}
 }
 
@@ -225,20 +226,117 @@ func (r GameOverReason) String() string {
 
 // PlayerInfo holds information about a player in the game
 type PlayerInfo struct {
-	PlayerID     byte        `json:"id"`
-	Name         string      `json:"name"`
-	Color        PlayerColor `json:"color"`
-	HatID        uint32      `json:"hat"`
-	PetID        uint32      `json:"pet"`
-	SkinID       uint32      `json:"skin"`
-	VisorID      uint32      `json:"visor"`
-	NamePlateID  uint32      `json:"namePlate"`
-	IsDead       bool        `json:"isDead"`
-	Disconnected bool        `json:"disconnected"`
-	RoleType     int32       `json:"roleType"`
-	RoleTeamType int32       `json:"roleTeamType"`
-	IsImpostor   bool        `json:"isImpostor"`
-	ColorHex     string      `json:"colorHex"`
+	PlayerID       byte            `json:"id"`
+	Name           string          `json:"name"`
+	Color          PlayerColor     `json:"color"`
+	ColorName      string          `json:"colorName"`
+	ColorHex       string          `json:"colorHex"`
+	IsDead         bool            `json:"isDead"`
+	Disconnected   bool            `json:"disconnected"`
+	RoleType       int32           `json:"roleType"`
+	RoleTeamType   int32           `json:"roleTeamType"`
+	RoleName       string          `json:"roleName"`
+	RoleNameJa     string          `json:"roleNameJa,omitempty"`
+	IsImpostor     bool            `json:"isImpostor"`
+	HatID          uint32          `json:"hat"`
+	PetID          uint32          `json:"pet"`
+	SkinID         uint32          `json:"skin"`
+	VisorID        uint32          `json:"visor"`
+	NamePlateID    uint32          `json:"namePlate"`
+	StructAddress  string          `json:"structAddress,omitempty"`
+	RawOffsets     map[string]byte `json:"rawOffsets,omitempty"`
+	IsDeadRawByte  byte            `json:"isDeadRawByte"`
+	RoleRawInt     int32           `json:"roleRawInt"`
+	RoleTeamRawInt int32           `json:"roleTeamRawInt"`
+}
+
+// RoleTypeName returns human-readable role name for RoleTypes enum value
+func RoleTypeName(roleType int32) string {
+	switch roleType {
+	case 0:
+		return "Crewmate"
+	case 1:
+		return "Impostor"
+	case 2:
+		return "Scientist"
+	case 3:
+		return "Engineer"
+	case 4:
+		return "GuardianAngel"
+	case 5:
+		return "Shapeshifter"
+	case 6:
+		return "CrewmateGhost"
+	case 7:
+		return "ImpostorGhost"
+	case 8:
+		return "Noisemaker"
+	case 9:
+		return "Phantom"
+	case 10:
+		return "Tracker"
+	case 11:
+		return "Detective"
+	case 12:
+		return "Viper"
+	case 13:
+		return "Judge"
+	case 14:
+		return "SpiritGuide"
+	default:
+		return fmt.Sprintf("Role(%d)", roleType)
+	}
+}
+
+// RoleTypeJapanese returns localized Japanese role name for RoleTypes enum value
+func RoleTypeJapanese(roleType int32) string {
+	switch roleType {
+	case 0:
+		return "クルーメイト"
+	case 1:
+		return "インポスター"
+	case 2:
+		return "科学者"
+	case 3:
+		return "エンジニア"
+	case 4:
+		return "守護天使"
+	case 5:
+		return "シェイプシフター"
+	case 6:
+		return "亡霊クルー"
+	case 7:
+		return "亡霊インポスター"
+	case 8:
+		return "ノイズメーカー"
+	case 9:
+		return "ファントム"
+	case 10:
+		return "トラッカー"
+	case 11:
+		return "ディテクティブ"
+	case 12:
+		return "ヴァイパー"
+	case 13:
+		return "ジャッジ"
+	case 14:
+		return "スピリットガイド"
+	default:
+		return "クルーメイト"
+	}
+}
+
+// IsImpostorRole returns true if role or team corresponds to an impostor
+func IsImpostorRole(roleType int32, teamType int32) bool {
+	if teamType == 1 {
+		return true
+	}
+	switch roleType {
+	case 1, 5, 7, 9, 12: // Impostor, Shapeshifter, ImpostorGhost, Phantom, Viper
+		return true
+	default:
+		return false
+	}
 }
 
 // GameStateChangeEvent is dispatched when the game state changes
@@ -268,4 +366,29 @@ type GameOverEvent struct {
 	GameOverReason GameOverReason `json:"gameOverReason"`
 	WinningPlayers []PlayerInfo   `json:"winningPlayers"`
 	MatchResult    MatchResult    `json:"matchResult"`
+}
+
+// PlayerSnapshotItem represents a single player entry in requirement format
+type PlayerSnapshotItem struct {
+	Name   string `json:"name"`
+	IsDead bool   `json:"isDead"`
+	Color  int    `json:"color"`
+}
+
+// GameSnapshot represents the complete game snapshot in requirement format
+type GameSnapshot struct {
+	GameState    int                  `json:"gameState"`
+	GameStateStr string               `json:"gameStateStr"`
+	LobbyCode    string               `json:"lobbyCode"`
+	PlayerCount  int                  `json:"playerCount"`
+	Players      []PlayerSnapshotItem `json:"players"`
+}
+
+// ToSnapshotItem converts PlayerInfo to PlayerSnapshotItem
+func (p PlayerInfo) ToSnapshotItem() PlayerSnapshotItem {
+	return PlayerSnapshotItem{
+		Name:   p.Name,
+		IsDead: p.IsDead,
+		Color:  int(p.Color),
+	}
 }

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"sort"
 )
 
 //go:embed offsets.json
@@ -25,6 +26,7 @@ type GameOffsets struct {
 	AmongUsClientOffset        int                            `json:"AmongUsClientOffset"`
 	GameDataOffset             int                            `json:"GameDataOffset"`
 	MeetingHudOffset           int                            `json:"MeetingHudOffset"`
+	PlayerControlOffset        int                            `json:"PlayerControlOffset,omitempty"`
 	GameStartManagerOffset     int                            `json:"GameStartManagerOffset"`
 	HudManagerOffset           int                            `json:"HudManagerOffset"`
 	ServerManagerOffset        int                            `json:"ServerManagerOffset"`
@@ -216,12 +218,13 @@ func (om *OffsetManager) loadEmbeddedDefaults() {
 		},
 	}
 
-	// 2. Latest standard 64-bit build (v19s build 7489)
+	// 2. Latest standard 64-bit build (v19s build 7489 / v2024.x IL2CPP x64)
 	defaultX64 := &GameOffsets{
-		Description:               "v19s (build num: 7489) x64 IL2CPP",
+		Description:               "v19s (build num: 7489) / v2024.x IL2CPP x64",
 		AmongUsClientOffset:       0x34078C0,
 		GameDataOffset:            0x344AF48,
 		MeetingHudOffset:          0x3409CF8,
+		PlayerControlOffset:       0x34078C0,
 		GameStartManagerOffset:    0x3492128,
 		HudManagerOffset:          0x3492618,
 		ServerManagerOffset:       0x3494118,
@@ -274,9 +277,68 @@ func (om *OffsetManager) loadEmbeddedDefaults() {
 		},
 	}
 
+	legacyX64 := &GameOffsets{
+		Description:               "v2024.6.x (x64 IL2CPP)",
+		AmongUsClientOffset:       0x2AA6948,
+		GameDataOffset:            0x2A65F38,
+		MeetingHudOffset:          0x2AA81F0,
+		PlayerControlOffset:       0x2A9C128,
+		GameStartManagerOffset:    0x2A31FE8,
+		HudManagerOffset:          0x2A32508,
+		ServerManagerOffset:       0x2A33CE8,
+		TempDataOffset:            0x2A7AAB8,
+		GameOptionsOffset:         0x2A669B8,
+		MeetingHudPtr:             []int{0x2AA81F0, 0xB8, 0x0},
+		MeetingHudCachePtrOffsets: []int{0x10},
+		MeetingHudStateOffsets:    []int{0xD0},
+		GameStateOffsets:          []int{0x2AA6948, 0xB8, 0x0, 0xEC},
+		AllPlayerPtrOffsets:       []int{0x2A65F38, 0xB8, 0x0, 0x30},
+		AllPlayersOffsets:         []int{0x10},
+		PlayerCountOffsets:        []int{0x18},
+		ExiledPlayerIdOffsets:     []int{0x2AA81F0, 0xB8, 0x0, 0xE8, 0x10},
+		RawGameOverReasonOffsets:  []int{0x2A7AAB8, 0xB8, 0xC},
+		WinningPlayersPtrOffsets:  []int{0x2A7AAB8, 0xB8, 0x18},
+		WinningPlayersOffsets:     []int{0x10},
+		WinningPlayerCountOffsets: []int{0x18},
+		GameCodeOffsets:           []int{0x2A31FE8, 0xB8, 0x0, 0x50, 0xD8},
+		PlayRegionOffsets:         []int{0x2A33CE8, 0xB8, 0x0, 0x20, 0x10, 0x10},
+		PlayMapOffsets:            []int{0x2A669B8, 0xB8, 0x0, 0x30, 0x1C},
+		StringOffsets:             []int{0x10, 0x14},
+		AddPlayerPtr:              0x8,
+		PlayerListPtr:             0x20,
+		PlayerInfoStructOffsets: PlayerInfoStructOffsets{
+			PlayerIDOffset:     0x10,
+			OutfitsOffset:      []int{0x30, 0x18, 0x30},
+			PlayerLevelOffset:  0x38,
+			DisconnectedOffset: 0x3C,
+			RoleTypeOffset:     []int{0x40, 0x18},
+			RoleTeamTypeOffset: []int{0x40, 0x48},
+			TasksOffset:        0x48,
+			IsDeadOffset:       0x50,
+			ObjectOffset:       0x58,
+		},
+		WinningPlayerDataOffsets: WinningPlayerDataStructOffsets{
+			PlayerNameOffset: 0x10,
+			OutfitOffset:     0x18,
+			IsYouOffset:      0x20,
+			IsImposterOffset: 0x21,
+			IsDeadOffset:     0x22,
+		},
+		PlayerOutfitStructOffsets: PlayerOutfitStructOffsets{
+			ColorIDOffset:     0x14,
+			HatIDOffset:       0x18,
+			PetIDOffset:       0x20,
+			SkinIDOffset:      0x28,
+			VisorIDOffset:     0x30,
+			NamePlateIDOffset: 0x38,
+			PlayerNameOffset:  0x48,
+		},
+	}
+
 	om.mu.Lock()
 	om.offsets["DEFAULT_X86"] = defaultX86
 	om.offsets["DEFAULT_X64"] = defaultX64
+	om.offsets["LEGACY_X64"] = legacyX64
 
 	// Register official version hashes
 	om.offsets["DBF89A6CE26E641141DE8125FB52CF099A573A9BC8FB04C384C71FDA54F3FE94"] = defaultX86
@@ -377,6 +439,7 @@ func (om *OffsetManager) loadEmbeddedDefaults() {
 		PlayerOutfitStructOffsets: defaultX86.PlayerOutfitStructOffsets,
 	}
 	om.offsets["BBF92B7241B72EF60E0ACC7AEEBF3669C27CB32BC04968EAAF60F8B67B9CC660"] = defaultX64
+	om.offsets["615A95C9E09B6FFD45570883CB8459311C2B457533A38B37ED1704D6205AEDF9"] = defaultX64
 	om.mu.Unlock()
 }
 
@@ -496,4 +559,46 @@ func (om *OffsetManager) GetAllOffsets() map[string]*GameOffsets {
 		res[k] = v
 	}
 	return res
+}
+
+// GetAllKnownOffsets returns a prioritized slice of known offset templates matching the bitness
+func (om *OffsetManager) GetAllKnownOffsets(is64 bool) []*GameOffsets {
+	om.mu.RLock()
+	defer om.mu.RUnlock()
+
+	var result []*GameOffsets
+	seen := make(map[int]bool) // deduplicate by GameDataOffset or AllPlayerPtrOffsets[0]
+
+	// Add default first
+	def := om.GetDefaultOffsets(is64)
+	if def != nil {
+		result = append(result, def)
+		if len(def.AllPlayerPtrOffsets) > 0 {
+			seen[def.AllPlayerPtrOffsets[0]] = true
+		}
+	}
+
+	var nonDefault []*GameOffsets
+	for _, v := range om.offsets {
+		if v == nil || len(v.AllPlayerPtrOffsets) == 0 {
+			continue
+		}
+		// Distinguish 64-bit vs 32-bit:
+		isOffset64 := v.AddPlayerPtr == 8 || v.PlayerListPtr >= 0x20 || (len(v.AllPlayerPtrOffsets) > 1 && v.AllPlayerPtrOffsets[1] == 0xB8)
+		if isOffset64 == is64 {
+			rva := v.AllPlayerPtrOffsets[0]
+			if !seen[rva] {
+				seen[rva] = true
+				nonDefault = append(nonDefault, v)
+			}
+		}
+	}
+
+	// Sort descending by RVA (higher RVAs are usually newer game builds)
+	sort.Slice(nonDefault, func(i, j int) bool {
+		return nonDefault[i].AllPlayerPtrOffsets[0] > nonDefault[j].AllPlayerPtrOffsets[0]
+	})
+
+	result = append(result, nonDefault...)
+	return result
 }
