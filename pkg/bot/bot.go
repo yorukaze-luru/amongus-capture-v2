@@ -947,6 +947,30 @@ func (b *DiscordBot) OnGameStateChanged(oldState, newState memory.GameState) {
 
 	b.RefreshVoiceMembers()
 	b.UpdateStatusEmbed()
+
+	// When entering Discussion (Emergency Meeting or Body Reported),
+	// run follow-up checks at 300ms, 800ms, and 1500ms to catch any players
+	// whose death was confirmed while the meeting screen was loading!
+	if newState == memory.StateDiscussion {
+		go func() {
+			for _, delay := range []time.Duration{300 * time.Millisecond, 800 * time.Millisecond, 1500 * time.Millisecond} {
+				time.Sleep(delay)
+				b.mu.RLock()
+				connected := b.connected
+				b.mu.RUnlock()
+				if !connected || b.gr == nil {
+					return
+				}
+				if b.gr.GetCurrentState() != memory.StateDiscussion {
+					return
+				}
+				latestPlayers := b.gr.GetSnapshotPlayers()
+				b.ApplyGameStateToVoice(memory.StateDiscussion, latestPlayers)
+				b.RefreshVoiceMembers()
+				b.UpdateStatusEmbed()
+			}
+		}()
+	}
 }
 
 func (b *DiscordBot) OnPlayerChanged(event memory.PlayerChangeEvent) {

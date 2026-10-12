@@ -244,6 +244,14 @@ func (gr *GameReader) pollGameState() {
 		gr.mu.Unlock()
 
 		log.Printf("[GameReader] Game State changed: %s -> %s", oldState.String(), newState.String())
+
+		// CRITICAL: When entering Discussion (Meeting / Body Report),
+		// immediately re-poll all players FIRST so all killed/dead players are identified and marked as dead
+		// BEFORE notifying state change to Discord bot!
+		if newState == StateDiscussion {
+			gr.pollPlayers(mr, base, offsets, sigs)
+		}
+
 		gr.notifyStateChange(oldState, newState)
 
 		if newState == StateEnded {
@@ -370,6 +378,67 @@ func (gr *GameReader) isMeetingActive(mr *MemoryReader, base uintptr, offsets *G
 	}
 
 	return false
+}
+
+// syncMeetingHudDeadPlayers inspects MeetingHud during emergency meetings/reports
+// and marks players that are dead in the meeting UI as dead in currentList.
+func (gr *GameReader) syncMeetingHudDeadPlayers(mr *MemoryReader, base uintptr, offsets *GameOffsets, sigs ScannedPointers, currentList map[byte]PlayerInfo) {
+	meetingHudAddr := uintptr(0)
+	if len(offsets.MeetingHudPtr) > 0 {
+		meetingHudAddr, _ = mr.ReadPtrOffsets(base, offsets.MeetingHudPtr)
+	}
+	if meetingHudAddr == 0 && sigs.MeetingHudClassPtr > 0 {
+		meetingHudAddr = gr.resolveInstanceFromClass(mr, sigs.MeetingHudClassPtr)
+	}
+	if meetingHudAddr == 0 {
+		return
+	}
+
+	step := uintptr(8)
+	lenOff := uintptr(0x18)
+	elemStart := uintptr(0x20)
+	if !mr.is64 {
+		step = 4
+		lenOff = 0xC
+		elemStart = 0x10
+	}
+
+	// Scan MeetingHud fields for playerStates array (PlayerVoteArea[])
+	for off := uintptr(0x20); off <= 0x140; off += step {
+		arrayPtr, err := mr.ReadPtr(meetingHudAddr + off)
+		if err != nil || arrayPtr == 0 {
+			continue
+		}
+
+		length, err := mr.ReadInt32(arrayPtr + lenOff)
+		if err == nil && length > 0 && length <= 15 {
+			for i := 0; i < int(length); i++ {
+				voteAreaPtr, err := mr.ReadPtr(arrayPtr + elemStart + uintptr(i)*step)
+				if err != nil || voteAreaPtr == 0 {
+					continue
+				}
+
+				// Search PlayerVoteArea for TargetPlayerId (byte, 0..15) and amDead (bool: 1)
+				for pOff := uintptr(0x10); pOff <= 0x80; pOff++ {
+					pid, err := mr.ReadUInt8(voteAreaPtr + pOff)
+					if err == nil && pid <= 15 {
+						if _, exists := currentList[pid]; exists {
+							for bOff := uintptr(1); bOff <= 6; bOff++ {
+								deadFlag, err := mr.ReadUInt8(voteAreaPtr + pOff + bOff)
+								if err == nil && deadFlag == 1 {
+									if p, ok := currentList[pid]; ok && !p.IsDead {
+										p.IsDead = true
+										currentList[pid] = p
+										log.Printf("[GameReader] MeetingHud: Confirmed dead player %d (%s) from meeting screen", pid, p.Name)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 func (gr *GameReader) pollLobby(mr *MemoryReader, base uintptr, offsets *GameOffsets, sigs ScannedPointers) {
@@ -588,6 +657,11 @@ func (gr *GameReader) pollPlayers(mr *MemoryReader, base uintptr, offsets *GameO
 				}
 			}
 		}
+	}
+
+	// 3. Meeting Verification: In Discussion state, cross-check MeetingHud UI for dead players
+	if curState == StateDiscussion {
+		gr.syncMeetingHudDeadPlayers(mr, base, offsets, sigs, currentList)
 	}
 
 	gr.mu.Lock()
