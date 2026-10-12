@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +67,10 @@ type DiscordBot struct {
 	voiceMembers    map[string]*discordgo.VoiceState // UserID -> VoiceState
 	embedUpdateChan chan struct{}
 	stopEmbedWorker chan struct{}
+
+	// Game death confirmation (tracks deaths confirmed during discussions)
+	deadMu        sync.RWMutex
+	confirmedDead map[string]bool // keys: lowercase color name & player name
 }
 
 // NewDiscordBot creates a new self-hosted bot instance
@@ -76,6 +81,7 @@ func NewDiscordBot(cfgMgr *config.ConfigManager, gr *memory.GameReader) *Discord
 		voiceMembers:    make(map[string]*discordgo.VoiceState),
 		embedUpdateChan: make(chan struct{}, 1),
 		stopEmbedWorker: make(chan struct{}),
+		confirmedDead:   make(map[string]bool),
 	}
 
 	go bot.embedUpdateWorker()
@@ -85,6 +91,42 @@ func NewDiscordBot(cfgMgr *config.ConfigManager, gr *memory.GameReader) *Discord
 	}
 
 	return bot
+}
+
+func (b *DiscordBot) confirmDeadPlayers(players []memory.PlayerInfo) {
+	b.deadMu.Lock()
+	defer b.deadMu.Unlock()
+	if b.confirmedDead == nil {
+		b.confirmedDead = make(map[string]bool)
+	}
+	for _, p := range players {
+		if p.IsDead || p.Disconnected {
+			if p.Color != memory.ColorUnknown {
+				b.confirmedDead[strings.ToLower(p.Color.String())] = true
+			}
+			if p.Name != "" {
+				b.confirmedDead[strings.ToLower(p.Name)] = true
+			}
+		}
+	}
+}
+
+func (b *DiscordBot) isConfirmedDead(key string) bool {
+	if key == "" {
+		return false
+	}
+	b.deadMu.RLock()
+	defer b.deadMu.RUnlock()
+	if b.confirmedDead == nil {
+		return false
+	}
+	return b.confirmedDead[strings.ToLower(key)]
+}
+
+func (b *DiscordBot) resetConfirmedDead() {
+	b.deadMu.Lock()
+	defer b.deadMu.Unlock()
+	b.confirmedDead = make(map[string]bool)
 }
 
 // AddListener registers a bot event listener
@@ -570,7 +612,9 @@ func (b *DiscordBot) ApplyGameStateToVoice(state memory.GameState, players []mem
 			// Determine if this in-game player is dead or disconnected
 			isDead := false
 			if p, ok := playerStatusMap[strings.ToLower(matchedName)]; ok {
-				isDead = p.IsDead || p.Disconnected
+				isDead = p.IsDead || p.Disconnected || b.isConfirmedDead(matchedName) || b.isConfirmedDead(p.Name) || b.isConfirmedDead(p.Color.String())
+			} else if b.isConfirmedDead(matchedName) {
+				isDead = true
 			}
 
 			switch state {
@@ -581,15 +625,9 @@ func (b *DiscordBot) ApplyGameStateToVoice(state memory.GameState, players []mem
 
 			case memory.StateTasks:
 				// Tasks:
-				// Alive players: Muted & Deafened (cannot speak, cannot hear ghosts)
-				// Dead players (Ghosts): Unmuted & Undeafened (can talk freely with other ghosts!)
-				if isDead {
-					targetMute = false
-					targetDeaf = false
-				} else {
-					targetMute = true
-					targetDeaf = true
-				}
+				// タスク中: 全員ミュート＆スピーカーミュート（死亡者も仮死状態としてミュート維持）
+				targetMute = true
+				targetDeaf = true
 
 			case memory.StateDiscussion:
 				// Discussion / Meeting:
@@ -741,7 +779,17 @@ func (b *DiscordBot) buildRealtimeStatusEmbed() *discordgo.MessageEmbed {
 		}
 		playerStatusMap[strings.ToLower(p.Color.String())] = p
 
-		if p.IsDead || p.Disconnected {
+		// Determine dead status: during tasks, newly dead players remain in pseudo-death (仮死状態)
+		isPlayerDead := p.IsDead || p.Disconnected
+		if gameState == memory.StateTasks {
+			colorKey := strings.ToLower(p.Color.String())
+			nameKey := strings.ToLower(p.Name)
+			if !b.isConfirmedDead(colorKey) && !b.isConfirmedDead(nameKey) {
+				isPlayerDead = false
+			}
+		}
+
+		if isPlayerDead {
 			deadCount++
 		} else {
 			aliveCount++
@@ -793,7 +841,28 @@ func (b *DiscordBot) buildRealtimeStatusEmbed() *discordgo.MessageEmbed {
 	var linkLines []string
 	linkedUserIDs := make(map[string]bool)
 
-	for key, uid := range cfg.PlayerMappings {
+	// Sort mapped keys by standard Among Us color index for deterministic, stable display
+	var sortedKeys []string
+	for key := range cfg.PlayerMappings {
+		sortedKeys = append(sortedKeys, key)
+	}
+	sort.Slice(sortedKeys, func(i, j int) bool {
+		c1 := memory.ParseColorByName(sortedKeys[i])
+		c2 := memory.ParseColorByName(sortedKeys[j])
+		if c1 != memory.ColorUnknown && c2 != memory.ColorUnknown {
+			return c1 < c2
+		}
+		if c1 != memory.ColorUnknown {
+			return true
+		}
+		if c2 != memory.ColorUnknown {
+			return false
+		}
+		return sortedKeys[i] < sortedKeys[j]
+	})
+
+	for _, key := range sortedKeys {
+		uid := cfg.PlayerMappings[key]
 		linkedUserIDs[uid] = true
 		pColor := memory.ParseColorByName(key)
 		emoji := pColor.Emoji()
@@ -802,22 +871,55 @@ func (b *DiscordBot) buildRealtimeStatusEmbed() *discordgo.MessageEmbed {
 			colorName = pColor.String()
 		}
 
-		// Find Discord display name
-		userName := ""
-		for _, vm := range vcMembers {
-			if vm.UserID == uid {
-				userName = vm.DisplayName
-				break
+		// Find in-game player info
+		var inGameName string
+		p, hasPlayer := playerStatusMap[strings.ToLower(key)]
+		if !hasPlayer {
+			// Also check by color match
+			for _, pi := range players {
+				if pi.Color == pColor {
+					p = pi
+					hasPlayer = true
+					break
+				}
 			}
+		}
+
+		if hasPlayer && p.Name != "" {
+			cleanName, _, _, _ := memory.ParseRoleAndCleanName(p.Name, p.RoleType, p.IsImpostor)
+			if cleanName != "" {
+				inGameName = cleanName
+			} else {
+				inGameName = p.Name
+			}
+		}
+		if inGameName == "" {
+			inGameName = "-"
 		}
 
 		// Player game status
 		statusBadge := "🟢 生存"
 		if gameState == memory.StateLobby || gameState == memory.StateMenu {
 			statusBadge = "🎮 待機"
-		} else if p, ok := playerStatusMap[strings.ToLower(key)]; ok {
-			if p.IsDead {
-				statusBadge = "💀 幽霊"
+		} else if !hasPlayer {
+			statusBadge = "⚪ 未参加"
+		} else if gameState == memory.StateTasks {
+			// During Tasks: deaths are kept hidden (仮死状態) unless confirmed in previous discussion
+			colorKey := strings.ToLower(p.Color.String())
+			nameKey := strings.ToLower(p.Name)
+			if b.isConfirmedDead(colorKey) || b.isConfirmedDead(nameKey) {
+				statusBadge = "💀 死亡"
+			} else if p.Disconnected {
+				statusBadge = "🔌 切断"
+			} else {
+				statusBadge = "🟢 生存"
+			}
+		} else {
+			// During Discussion, Ended, or other states: reveal confirmed deaths
+			colorKey := strings.ToLower(p.Color.String())
+			nameKey := strings.ToLower(p.Name)
+			if p.IsDead || b.isConfirmedDead(colorKey) || b.isConfirmedDead(nameKey) {
+				statusBadge = "💀 死亡"
 			} else if p.Disconnected {
 				statusBadge = "🔌 切断"
 			} else {
@@ -825,15 +927,11 @@ func (b *DiscordBot) buildRealtimeStatusEmbed() *discordgo.MessageEmbed {
 			}
 		}
 
-		userDisplay := fmt.Sprintf("<@%s>", uid)
-		if userName != "" {
-			userDisplay = fmt.Sprintf("<@%s> (%s)", uid, userName)
-		}
-
-		linkLines = append(linkLines, fmt.Sprintf("%s **%s** ➔ %s ｜ %s", emoji, colorName, userDisplay, statusBadge))
+		// Format: カラーDiscord名（ゲーム内名）｜生存状態
+		linkLines = append(linkLines, fmt.Sprintf("%s **%s** <@%s>（%s）｜ %s", emoji, colorName, uid, inGameName, statusBadge))
 	}
 
-	mappingText := "*(登録されているリンクはありません。WEBパネルから色を設定してください)*"
+	mappingText := "*(登録されているプレイヤーはありません)*"
 	if len(linkLines) > 0 {
 		mappingText = strings.Join(linkLines, "\n")
 	}
@@ -852,7 +950,7 @@ func (b *DiscordBot) buildRealtimeStatusEmbed() *discordgo.MessageEmbed {
 		Color:       colorInt,
 		Fields: []*discordgo.MessageEmbedField{
 			{
-				Name:   "🎨 プレイヤー & カラー紐付け",
+				Name:   "プレイヤーカラー",
 				Value:  mappingText,
 				Inline: false,
 			},
@@ -905,7 +1003,7 @@ func (b *DiscordBot) buildRealtimeStatusEmbed() *discordgo.MessageEmbed {
 
 	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 		Name:   "💡 ボイスチャンネル制御",
-		Value:  "• タスク中: 生存者は Mute & Deaf ｜ 議論中: 全員会話可能 ｜ 幽霊: 幽霊同士で会話\n• ※ 未登録メンバーは常時ミュート解除されます。",
+		Value:  "• タスク中: 全員 Mute & Deaf (死亡者も仮死ミュート) ｜ 議論中: 生存者は会話可能 / 死亡者は聞き専\n• ※ 未登録メンバー（観戦）は常時ミュート解除されます。",
 		Inline: false,
 	})
 
@@ -930,13 +1028,24 @@ func (b *DiscordBot) SetPlayerMapping(key, userID string) {
 // GameListener implementations
 
 func (b *DiscordBot) OnGameStateChanged(oldState, newState memory.GameState) {
-	if !b.IsConnected() {
-		return
-	}
 	var players []memory.PlayerInfo
 	if b.gr != nil {
 		players = b.gr.GetSnapshotPlayers()
 	}
+
+	// State-specific death tracking:
+	// - Lobby / Menu / GameOver: reset confirmed deaths
+	// - Discussion: confirm all currently dead players (transition from pseudo-death to dead)
+	if newState == memory.StateLobby || newState == memory.StateMenu || newState == memory.StateEnded {
+		b.resetConfirmedDead()
+	} else if newState == memory.StateDiscussion {
+		b.confirmDeadPlayers(players)
+	}
+
+	if !b.IsConnected() {
+		return
+	}
+
 	b.notifyLog(fmt.Sprintf("[DiscordBot] ゲーム状態変化: %s ➔ VC自動ミュート適用中...", newState.String()), "info")
 	b.ApplyGameStateToVoice(newState, players)
 
@@ -965,6 +1074,7 @@ func (b *DiscordBot) OnGameStateChanged(oldState, newState memory.GameState) {
 					return
 				}
 				latestPlayers := b.gr.GetSnapshotPlayers()
+				b.confirmDeadPlayers(latestPlayers)
 				b.ApplyGameStateToVoice(memory.StateDiscussion, latestPlayers)
 				b.RefreshVoiceMembers()
 				b.UpdateStatusEmbed()
@@ -986,6 +1096,9 @@ func (b *DiscordBot) OnPlayerChanged(event memory.PlayerChangeEvent) {
 		state := memory.StateUnknown
 		if b.gr != nil {
 			state = b.gr.GetCurrentState()
+		}
+		if state == memory.StateDiscussion {
+			b.confirmDeadPlayers(players)
 		}
 		b.ApplyGameStateToVoice(state, players)
 		b.RefreshVoiceMembers()

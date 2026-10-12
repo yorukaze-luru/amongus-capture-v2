@@ -1,9 +1,11 @@
 package bot
 
 import (
+	"strings"
 	"testing"
 
 	"amongus-capture-v2/pkg/config"
+	"amongus-capture-v2/pkg/memory"
 )
 
 func TestSetChannels_UnsetStatusCID(t *testing.T) {
@@ -73,5 +75,78 @@ func TestSetChannels_ChangeStatusCID(t *testing.T) {
 	}
 	if currentStatusMsgID != "" {
 		t.Errorf("expected statusMsgID to be reset to empty for new channel, got '%s'", currentStatusMsgID)
+	}
+}
+
+func TestConfirmedDead_TasksAndDiscussion(t *testing.T) {
+	cfgMgr := config.NewConfigManager()
+	gr := memory.NewGameReader(nil)
+	bot := NewDiscordBot(cfgMgr, gr)
+	defer bot.Stop()
+
+	// Add players
+	p1 := gr.AddManualPlayer("Tanaka", "Red")
+	p2 := gr.AddManualPlayer("Sato", "Blue")
+
+	// Initially, confirmedDead is empty
+	if bot.isConfirmedDead("Red") || bot.isConfirmedDead("Tanaka") {
+		t.Fatalf("expected Red/Tanaka to not be confirmed dead initially")
+	}
+
+	// Tanaka dies during Tasks
+	p1.IsDead = true
+	// During StateTasks, Tanaka is in pseudo-death (仮死状態) and not yet confirmed dead
+	if bot.isConfirmedDead("Red") || bot.isConfirmedDead("Tanaka") {
+		t.Fatalf("expected Red/Tanaka to still NOT be confirmed dead during tasks")
+	}
+
+	// Discussion starts!
+	bot.confirmDeadPlayers([]memory.PlayerInfo{p1, p2})
+	if !bot.isConfirmedDead("Red") || !bot.isConfirmedDead("Tanaka") {
+		t.Fatalf("expected Red/Tanaka to be confirmed dead in discussion")
+	}
+	if bot.isConfirmedDead("Blue") || bot.isConfirmedDead("Sato") {
+		t.Fatalf("expected Blue/Sato to remain alive")
+	}
+
+	// Reset on Lobby
+	bot.OnGameStateChanged(memory.StateDiscussion, memory.StateLobby)
+	if bot.isConfirmedDead("Red") {
+		t.Fatalf("expected confirmedDead to be reset in Lobby")
+	}
+}
+
+func TestRealtimeStatusEmbed_PlayerColorsFormat(t *testing.T) {
+	cfgMgr := config.NewConfigManager()
+	_ = cfgMgr.Update(func(c *config.AppConfig) {
+		c.PlayerMappings["Red"] = "user_red_123"
+		c.PlayerMappings["Blue"] = "user_blue_456"
+	})
+
+	gr := memory.NewGameReader(nil)
+	bot := NewDiscordBot(cfgMgr, gr)
+	defer bot.Stop()
+
+	gr.AddManualPlayer("Tanaka", "Red")
+	gr.AddManualPlayer("Sato", "Blue")
+
+	embed := bot.buildRealtimeStatusEmbed()
+	if len(embed.Fields) == 0 {
+		t.Fatalf("expected embed fields, got none")
+	}
+
+	// First field must be "プレイヤーカラー"
+	field := embed.Fields[0]
+	if field.Name != "プレイヤーカラー" {
+		t.Errorf("expected field name 'プレイヤーカラー', got '%s'", field.Name)
+	}
+
+	// Must contain formatted string: カラーDiscord名（ゲーム内名）｜生存状態
+	// e.g. 🔴 **Red** <@user_red_123>（Tanaka）｜ 🎮 待機
+	if !strings.Contains(field.Value, "🔴 **Red** <@user_red_123>（Tanaka）｜ 🎮 待機") {
+		t.Errorf("expected formatted string for Red, got: %s", field.Value)
+	}
+	if !strings.Contains(field.Value, "🔵 **Blue** <@user_blue_456>（Sato）｜ 🎮 待機") {
+		t.Errorf("expected formatted string for Blue, got: %s", field.Value)
 	}
 }

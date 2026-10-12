@@ -52,11 +52,6 @@ const els = {
   // Unmute
   btnUnmuteAll: document.getElementById('btn-unmute-all'),
 
-  // In-Game Players
-  ingamePlayerCount: document.getElementById('ingame-player-count'),
-  ingamePlayersTbody: document.getElementById('ingame-players-tbody'),
-  btnForceSync: document.getElementById('btn-force-sync'),
-
   // Resource Tile
   resourceTile: document.getElementById('resource-tile'),
   resourceStats: document.getElementById('resource-stats'),
@@ -488,9 +483,6 @@ function updateUI(s) {
     }
   }
 
-  // Render In-Game Players Table
-  renderInGamePlayers(state.players);
-
   // Render VC Members with direct Color Link dropdowns
   renderVoiceMembers(state.voiceMembers);
 }
@@ -676,88 +668,6 @@ function renderVoiceMembers(members) {
     chip.appendChild(avatar);
     chip.appendChild(details);
     els.vcMembersList.appendChild(chip);
-  });
-}
-
-function renderInGamePlayers(players) {
-  if (!els.ingamePlayersTbody) return;
-  if (els.ingamePlayerCount) {
-    els.ingamePlayerCount.textContent = (players || []).length;
-  }
-  if (!players || players.length === 0) {
-    els.ingamePlayersTbody.innerHTML = `
-      <tr>
-        <td colspan="6" class="text-center empty-row">ロビーまたは試合に参加するとプレイヤーが表示されます</td>
-      </tr>
-    `;
-    return;
-  }
-
-  els.ingamePlayersTbody.innerHTML = '';
-  players.forEach((p) => {
-    const tr = document.createElement('tr');
-    
-    // Resolve color
-    let colorName = 'Unknown';
-    if (typeof p.color === 'string') {
-      colorName = p.color;
-    } else if (typeof p.color === 'number') {
-      const colorKeys = Object.keys(colorMap);
-      if (p.color >= 0 && p.color < colorKeys.length) {
-        colorName = colorKeys[p.color];
-      }
-    }
-    const colorInfo = getColorInfo(colorName);
-    const colorHex = p.colorHex || colorInfo.hex || '#888';
-    const colorLabel = colorInfo.label || colorName;
-    const name = sanitizePlayerName(p.name, colorName);
-
-    // Status Badge (Alive vs Dead)
-    const statusBadge = p.isDead
-      ? `<span class="badge-dead">💀 死亡</span>`
-      : `<span class="badge-alive">❤️ 生存</span>`;
-
-    // Disconnected Badge
-    const discBadge = p.disconnected
-      ? `<span class="text-danger" style="font-weight:700;">● 切断</span>`
-      : `<span class="text-success" style="font-weight:600;">● 接続中</span>`;
-
-    // Role Badge
-    let roleBadge = '<span class="badge-crew">クルー</span>';
-    if (p.isImpostor) {
-      roleBadge = `<span class="badge-impostor">🔪 ${p.roleNameJa || p.roleName || 'インポスター'}</span>`;
-    } else if (p.roleNameJa || p.roleName) {
-      roleBadge = `<span class="badge-crew" style="color:#38bdf8;border-color:rgba(56,189,248,0.4);">🛡️ ${p.roleNameJa || p.roleName}</span>`;
-    }
-
-    tr.innerHTML = `
-      <td><strong>#${p.id !== undefined ? p.id : '-'}</strong></td>
-      <td>
-        <span class="player-color-pill">
-          <span class="player-color-dot" style="background-color: ${colorHex};"></span>
-          <span>${colorLabel}</span>
-        </span>
-      </td>
-      <td><strong>${name}</strong></td>
-      <td>${statusBadge}</td>
-      <td>${discBadge}</td>
-      <td>${roleBadge}</td>
-    `;
-    els.ingamePlayersTbody.appendChild(tr);
-  });
-}
-
-if (els.btnForceSync) {
-  els.btnForceSync.addEventListener('click', () => {
-    addLog('ゲーム内メモリの強制再同期中...', 'info');
-    fetch('/api/sync', { method: 'POST' })
-      .then((r) => r.json())
-      .then(() => {
-        addLog('ゲーム内メモリを再同期しました', 'success');
-      })
-      .catch((err) => {
-        addLog(`強制同期エラー: ${err}`, 'error');
-      });
   });
 }
 
