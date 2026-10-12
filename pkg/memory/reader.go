@@ -255,6 +255,16 @@ func (gr *GameReader) pollGameState() {
 			gr.currentLobbyCode = ""
 			gr.cachedPlayerListAddr = 0
 			gr.mu.Unlock()
+		} else if newState == StateLobby {
+			// Reset dead flags when returning to lobby for next round
+			gr.mu.Lock()
+			for id, p := range gr.currentPlayers {
+				if p.IsDead {
+					p.IsDead = false
+					gr.currentPlayers[id] = p
+				}
+			}
+			gr.mu.Unlock()
 		}
 		oldState = newState
 	}
@@ -548,8 +558,39 @@ func (gr *GameReader) pollPlayers(mr *MemoryReader, base uintptr, offsets *GameO
 		return
 	}
 
-	gr.mu.Lock()
+	gr.mu.RLock()
+	curState := gr.currentState
 	oldPlayers := gr.currentPlayers
+	gr.mu.RUnlock()
+
+	// 1. Sticky Death State: In active matches (Tasks/Discussion), dead players cannot revive
+	if curState == StateTasks || curState == StateDiscussion {
+		for id, p := range currentList {
+			if oldP, ok := oldPlayers[id]; ok && oldP.IsDead {
+				if !p.IsDead {
+					p.IsDead = true
+					currentList[id] = p
+				}
+			}
+		}
+	}
+
+	// 2. Check Exiled Player from MeetingHud (if applicable)
+	if (curState == StateTasks || curState == StateDiscussion) && len(offsets.ExiledPlayerIdOffsets) > 0 {
+		exiledAddr, err := mr.ReadPtrOffsetsWithFinalAddress(base, offsets.ExiledPlayerIdOffsets)
+		if err == nil && exiledAddr != 0 {
+			exiledId, err := mr.ReadUInt8(exiledAddr)
+			if err == nil && exiledId <= 15 {
+				if p, ok := currentList[exiledId]; ok && !p.IsDead {
+					p.IsDead = true
+					currentList[exiledId] = p
+					log.Printf("[GameReader] Exiled player %d (%s) marked as DEAD", exiledId, p.Name)
+				}
+			}
+		}
+	}
+
+	gr.mu.Lock()
 	gr.currentPlayers = currentList
 	gr.mu.Unlock()
 
@@ -846,16 +887,97 @@ func (gr *GameReader) extractPlayerInfoHeuristic(mr *MemoryReader, playerStructP
 	outfitOffsets := offsets.PlayerOutfitStructOffsets
 
 	if pOffsets.PlayerIDOffset > 0 {
-		idByte, _ := mr.ReadUInt8(playerStructPtr + uintptr(pOffsets.PlayerIDOffset))
-		playerID = idByte
+		idByte, err := mr.ReadUInt8(playerStructPtr + uintptr(pOffsets.PlayerIDOffset))
+		if err == nil {
+			playerID = idByte
+		}
 	}
+
+	// Multi-tier IsDead detection
+	// Tier 1: Configured IsDeadOffset
 	if pOffsets.IsDeadOffset > 0 {
-		deadByte, _ := mr.ReadUInt8(playerStructPtr + uintptr(pOffsets.IsDeadOffset))
-		isDead = deadByte != 0
+		deadByte, err := mr.ReadUInt8(playerStructPtr + uintptr(pOffsets.IsDeadOffset))
+		if err == nil && deadByte != 0 {
+			isDead = true
+		}
 	}
+
+	// Tier 2: Structural Window Scan between Tasks and Object
+	// In IL2CPP C#, `bool IsDead` is structurally placed between `List<TaskInfo> Tasks` (pointer)
+	// and `PlayerControl _object` (pointer).
+	if !isDead {
+		tasksOff := pOffsets.TasksOffset
+		objectOff := pOffsets.ObjectOffset
+		ptrSize := 8
+		if !mr.is64 {
+			ptrSize = 4
+		}
+
+		if tasksOff > 0 && objectOff > tasksOff {
+			windowStart := tasksOff + ptrSize
+			for off := windowStart; off < objectOff; off++ {
+				val, err := mr.ReadUInt8(playerStructPtr + uintptr(off))
+				if err == nil && val == 1 {
+					isDead = true
+					break
+				}
+			}
+		} else if objectOff > 0 {
+			scanStart := objectOff - ptrSize
+			if scanStart >= 0x20 {
+				for off := scanStart; off < objectOff; off++ {
+					val, err := mr.ReadUInt8(playerStructPtr + uintptr(off))
+					if err == nil && val == 1 {
+						isDead = true
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Tier 3: Known historical version offsets for IsDead
+	if !isDead {
+		knownDeadOffsets := []int{0x78, 0x70, 0x50, 0x54, 0x30, 0x32, 0x29, 0x28, 0x79, 0x71, 0x51}
+		for _, off := range knownDeadOffsets {
+			if off == pOffsets.PlayerIDOffset ||
+				off == pOffsets.DisconnectedOffset ||
+				off == pOffsets.PlayerLevelOffset ||
+				off == pOffsets.TasksOffset ||
+				off == pOffsets.ObjectOffset {
+				continue
+			}
+			val, err := mr.ReadUInt8(playerStructPtr + uintptr(off))
+			if err == nil && val == 1 {
+				isDead = true
+				break
+			}
+		}
+	}
+
+	// Multi-tier Disconnected detection
 	if pOffsets.DisconnectedOffset > 0 {
-		discByte, _ := mr.ReadUInt8(playerStructPtr + uintptr(pOffsets.DisconnectedOffset))
-		disconnected = discByte != 0
+		discByte, err := mr.ReadUInt8(playerStructPtr + uintptr(pOffsets.DisconnectedOffset))
+		if err == nil && discByte != 0 {
+			disconnected = true
+		}
+	}
+	if !disconnected {
+		knownDiscOffsets := []int{0x64, 0x5C, 0x3C, 0x24, 0x44, 0x48}
+		for _, off := range knownDiscOffsets {
+			if off == pOffsets.PlayerIDOffset ||
+				off == pOffsets.IsDeadOffset ||
+				off == pOffsets.PlayerLevelOffset ||
+				off == pOffsets.TasksOffset ||
+				off == pOffsets.ObjectOffset {
+				continue
+			}
+			discByte, err := mr.ReadUInt8(playerStructPtr + uintptr(off))
+			if err == nil && discByte == 1 {
+				disconnected = true
+				break
+			}
+		}
 	}
 
 	// Outfits pointer
