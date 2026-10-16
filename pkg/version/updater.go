@@ -45,6 +45,8 @@ var (
 
 // CleanupOldBinary removes any leftover .old or .new files from a previous self-update
 func CleanupOldBinary() {
+	SyncInstalledVersionRegistry()
+
 	exePath, err := os.Executable()
 	if err != nil {
 		return
@@ -116,7 +118,10 @@ func FetchLatestRelease(apiURL string) (UpdateInfo, error) {
 	}
 	if downloadURL == "" {
 		for _, asset := range ghRelease.Assets {
-			if strings.HasSuffix(strings.ToLower(asset.Name), ".exe") {
+			lowerName := strings.ToLower(asset.Name)
+			if strings.HasSuffix(lowerName, ".exe") &&
+				!strings.Contains(lowerName, "setup") &&
+				!strings.Contains(lowerName, "install") {
 				downloadURL = asset.BrowserDownloadURL
 				break
 			}

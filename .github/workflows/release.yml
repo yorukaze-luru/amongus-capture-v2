@@ -26,6 +26,18 @@ jobs:
         run: |
           go build -ldflags="-s -w -H windowsgui" -o AmongUsCapture-v2.exe ./cmd/aucapture
 
+      - name: Build Windows Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag -replace '^[vV]', ''
+          if ([string]::IsNullOrWhiteSpace($ver)) { $ver = "2.2.18" }
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc "/DMyAppVersion=$ver" installer.iss
+
       - name: Create Distribution ZIP
         run: |
           Compress-Archive -Path AmongUsCapture-v2.exe, README.md, LICENSE -DestinationPath AmongUsCapture-v2-windows-amd64.zip -Force
@@ -35,6 +47,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
+            AmongUsCapture-v2-Setup.exe
             AmongUsCapture-v2.exe
             AmongUsCapture-v2-windows-amd64.zip
           body_path: RELEASE_NOTES.md
