@@ -1,4 +1,4 @@
 package version
 
 // CurrentVersion is the official release version of AmongUsCapture-v2
-const CurrentVersion = "v2.2.18"
+const CurrentVersion = "v2.2.19"
