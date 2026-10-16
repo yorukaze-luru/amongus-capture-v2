@@ -57,6 +57,7 @@ func main() {
 	portFlag := flag.Int("port", 0, "WebUI dashboard port (0 = auto select free port)")
 	browserModeFlag := flag.Bool("browser", false, "Open in external web browser instead of dedicated native window")
 	headlessFlag := flag.Bool("headless", false, "Run in background headless mode (no GUI window)")
+	noUpdateFlag := flag.Bool("no-update", false, "Disable automatic self-update check on startup")
 	versionFlag := flag.Bool("v", false, "Show version")
 	flag.Parse()
 
@@ -65,13 +66,20 @@ func main() {
 		return
 	}
 
-	// 1. Enable Kill-On-Close Job Object on Windows (Kills all child processes like WebView2 automatically)
-	enableKillOnCloseJob()
-
-	// 2. Clean up any lingering old instances if present
+	// 1. Clean up any lingering old instances if present (before self-update or mutex creation)
 	killDuplicateInstances()
 
-	// 3. Single Instance Mutex on Windows
+	// 2. Automatic Startup Self-Update (runs before Job Object so restarted child process is independent)
+	if !*noUpdateFlag {
+		if updated, latestVer, err := version.CheckAndApplyStartupUpdate(); err == nil && updated {
+			restartUpdatedProcess(AppVersion, latestVer)
+		}
+	}
+
+	// 3. Enable Kill-On-Close Job Object on Windows (Kills all child processes like WebView2 automatically)
+	enableKillOnCloseJob()
+
+	// 4. Single Instance Mutex on Windows
 	if runtime.GOOS == "windows" {
 		modKernel32 := windows.NewLazySystemDLL("kernel32.dll")
 		procCreateMutexW := modKernel32.NewProc("CreateMutexW")
@@ -82,9 +90,6 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	// 0. Check for newer releases on GitHub in background
-	version.CheckStartupUpdate()
 
 	// 1. Initialize Configuration
 	cfgMgr := config.NewConfigManager()
@@ -581,4 +586,25 @@ func openBrowser(url string) {
 	}
 	_ = cmd.Start()
 }
+
+func restartUpdatedProcess(oldVersion, newVersion string) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return
+	}
+	if resolved, err := filepath.EvalSymlinks(exePath); err == nil {
+		exePath = resolved
+	}
+
+	cmd := exec.Command(exePath, os.Args[1:]...)
+	cmd.Dir = filepath.Dir(exePath)
+	cmd.Env = append(os.Environ(), fmt.Sprintf("AUCAPTURE_UPDATED_FROM=%s", oldVersion))
+	if err := cmd.Start(); err != nil {
+		log.Printf("[AutoUpdate] Failed to launch updated binary (%s): %v", newVersion, err)
+		return
+	}
+	log.Printf("[AutoUpdate] Launched updated binary (%s, PID: %d). Exiting old process...", newVersion, cmd.Process.Pid)
+	os.Exit(0)
+}
+
 

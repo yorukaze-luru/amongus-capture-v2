@@ -198,6 +198,19 @@ func (ws *WebServer) handleWS(w http.ResponseWriter, r *http.Request) {
 	})
 	_ = conn.WriteMessage(websocket.TextMessage, msg)
 
+	if prevVer := os.Getenv("AUCAPTURE_UPDATED_FROM"); prevVer != "" {
+		logMsg, err := json.Marshal(WSMessage{
+			Type: "log",
+			Payload: map[string]string{
+				"message": fmt.Sprintf("✨ 自動アップデート完了: %s ➔ %s に更新されました！", prevVer, version.CurrentVersion),
+				"level":   "success",
+			},
+		})
+		if err == nil {
+			_ = conn.WriteMessage(websocket.TextMessage, logMsg)
+		}
+	}
+
 	// Keep alive read loop
 	go func() {
 		defer func() {
