@@ -72,6 +72,7 @@ type StatePayload struct {
 	HasUpdate       bool                `json:"hasUpdate"`
 	LatestVersion   string              `json:"latestVersion"`
 	ReleaseURL      string              `json:"releaseUrl"`
+	DebugMode       bool                `json:"debugMode"`
 }
 
 // WSMessage is the message envelope for UI WebSocket
@@ -275,7 +276,21 @@ func (ws *WebServer) buildCurrentStatePayload() StatePayload {
 		HasUpdate:       upInfo.HasUpdate,
 		LatestVersion:   upInfo.LatestVersion,
 		ReleaseURL:      upInfo.ReleaseURL,
+		DebugMode:       config.IsDebugMode(),
 	}
+}
+
+func (ws *WebServer) isMatchLogSuppressed() bool {
+	if config.IsDebugMode() {
+		return false
+	}
+	if ws.gr != nil {
+		st := ws.gr.GetCurrentState()
+		if st == memory.StateTasks || st == memory.StateDiscussion {
+			return true
+		}
+	}
+	return false
 }
 
 func (ws *WebServer) stateBroadcastWorker(ctx context.Context) {
@@ -330,6 +345,9 @@ func (ws *WebServer) BroadcastStateUpdate() {
 }
 
 func (ws *WebServer) BroadcastLog(message, level string) {
+	if ws.isMatchLogSuppressed() {
+		return
+	}
 	msg, err := json.Marshal(WSMessage{
 		Type: "log",
 		Payload: map[string]string{

@@ -40,7 +40,7 @@ jobs:
 
       - name: Create Distribution ZIP
         run: |
-          Compress-Archive -Path AmongUsCapture-v2.exe, README.md, LICENSE -DestinationPath AmongUsCapture-v2-windows-amd64.zip -Force
+          Compress-Archive -Path AmongUsCapture-v2.exe, config.txt, README.md, LICENSE -DestinationPath AmongUsCapture-v2-windows-amd64.zip -Force
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

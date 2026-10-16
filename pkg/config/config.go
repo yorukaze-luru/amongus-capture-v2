@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -74,6 +75,8 @@ func CleanLegacyStorage() {
 
 // NewConfigManager initializes and loads the config
 func NewConfigManager() *ConfigManager {
+	EnsureConfigTxtFile()
+
 	appData := os.Getenv("APPDATA")
 	if appData == "" {
 		appData = "."
@@ -87,7 +90,72 @@ func NewConfigManager() *ConfigManager {
 	}
 
 	cm.Load()
+	if IsDebugMode() {
+		cm.mu.Lock()
+		cm.config.Debug = true
+		cm.mu.Unlock()
+	}
 	return cm
+}
+
+// getConfigTxtPaths returns candidate paths for config.txt (executable directory first, then current working directory)
+func getConfigTxtPaths() []string {
+	var paths []string
+	if exePath, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exePath); err == nil {
+			exePath = resolved
+		}
+		exeDir := filepath.Dir(exePath)
+		paths = append(paths, filepath.Join(exeDir, "config.txt"))
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		cwdPath := filepath.Join(cwd, "config.txt")
+		if len(paths) == 0 || !strings.EqualFold(paths[0], cwdPath) {
+			paths = append(paths, cwdPath)
+		}
+	}
+	return paths
+}
+
+// EnsureConfigTxtFile creates a default config.txt (with debag=false) in the executable directory if it does not exist yet
+func EnsureConfigTxtFile() {
+	paths := getConfigTxtPaths()
+	if len(paths) == 0 {
+		return
+	}
+	target := paths[0]
+	if _, err := os.Stat(target); os.IsNotExist(err) {
+		_ = os.WriteFile(target, []byte("debag=false\r\n"), 0644)
+	}
+}
+
+// IsDebugMode checks config.txt in the executable directory for debag=true (or debug=true)
+func IsDebugMode() bool {
+	for _, p := range getConfigTxtPaths() {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") || strings.HasPrefix(line, ";") {
+				continue
+			}
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			key := strings.ToLower(strings.TrimSpace(parts[0]))
+			val := strings.ToLower(strings.TrimSpace(parts[1]))
+			if key == "debag" || key == "debug" {
+				if val == "true" || val == "1" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // Load reads config from disk and applies automatic migrations
@@ -134,8 +202,12 @@ func (cm *ConfigManager) Save() error {
 // Get returns a copy of current config
 func (cm *ConfigManager) Get() AppConfig {
 	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	return cm.config
+	c := cm.config
+	cm.mu.RUnlock()
+	if IsDebugMode() {
+		c.Debug = true
+	}
+	return c
 }
 
 // Update updates the configuration and saves it

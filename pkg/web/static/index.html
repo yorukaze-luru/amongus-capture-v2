@@ -122,10 +122,16 @@
     </section>
 
     <!-- Live Log Console -->
-    <section class="card logs-card">
+    <section class="card logs-card" id="logs-card">
       <div class="card-header">
-        <h2>リアルタイム ログ</h2>
+        <div class="card-title-group">
+          <h2>リアルタイム ログ</h2>
+          <span id="log-status-badge" class="badge badge-warning" style="display: none;">🔒 試合中無効</span>
+        </div>
         <button id="btn-clear-logs" class="btn btn-text btn-sm">クリア</button>
+      </div>
+      <div id="log-disabled-notice" class="log-disabled-notice" style="display: none;">
+        🔒 試合中のためリアルタイムログは無効化されています
       </div>
       <div id="log-console" class="log-console">
         <div class="log-line log-info">[Init] AmongUsCapture v2 専用クライアント起動完了。</div>

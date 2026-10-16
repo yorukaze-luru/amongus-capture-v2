@@ -826,6 +826,21 @@ body {
   border: 1px solid var(--border-color);
 }
 
+.log-disabled-notice {
+  background: rgba(6, 9, 14, 0.75);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  user-select: none;
+}
+
 .log-line { word-break: break-all; }
 .log-info { color: #38bdf8; }
 .log-success { color: #4ade80; }

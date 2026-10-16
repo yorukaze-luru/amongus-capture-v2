@@ -14,6 +14,7 @@ const state = {
   voiceMembers: [],
   playerMappings: {},
   lastMatchResult: null,
+  debugMode: false,
 };
 
 const els = {
@@ -45,6 +46,9 @@ const els = {
   vcCount: document.getElementById('vc-count'),
 
   // Logs & Header
+  logsCard: document.getElementById('logs-card'),
+  logStatusBadge: document.getElementById('log-status-badge'),
+  logDisabledNotice: document.getElementById('log-disabled-notice'),
   logConsole: document.getElementById('log-console'),
   btnClearLogs: document.getElementById('btn-clear-logs'),
   btnRefreshOffsets: document.getElementById('btn-refresh-offsets'),
@@ -99,7 +103,14 @@ function sanitizePlayerName(name, defaultColor = '') {
   return clean;
 }
 
+function isMatchLogDisabled() {
+  return (state.gameState === 2 || state.gameState === 3) && !state.debugMode;
+}
+
 function addLog(msg, type = 'info') {
+  if (isMatchLogDisabled()) {
+    return;
+  }
   const line = document.createElement('div');
   line.className = `log-line log-${type}`;
   const time = new Date().toLocaleTimeString();
@@ -412,6 +423,34 @@ function updateUI(s) {
   state.selectedVoiceCId = s.voiceCId || '';
   state.selectedStatusCId = s.statusCId || '';
   state.lastMatchResult = s.lastMatchResult || null;
+  state.debugMode = !!s.debugMode;
+
+  // Toggle Live Log Console during match (TASKS / DISCUSSION) unless Debug Mode is enabled
+  const logDisabled = isMatchLogDisabled();
+  if (els.logConsole && els.logDisabledNotice) {
+    if (logDisabled) {
+      els.logConsole.style.display = 'none';
+      els.logDisabledNotice.style.display = 'flex';
+      if (els.btnClearLogs) els.btnClearLogs.disabled = true;
+    } else {
+      els.logConsole.style.display = 'flex';
+      els.logDisabledNotice.style.display = 'none';
+      if (els.btnClearLogs) els.btnClearLogs.disabled = false;
+    }
+  }
+  if (els.logStatusBadge) {
+    if (state.debugMode) {
+      els.logStatusBadge.style.display = 'inline-block';
+      els.logStatusBadge.className = 'badge badge-success';
+      els.logStatusBadge.textContent = '🛠️ DEBUG MODE';
+    } else if (logDisabled) {
+      els.logStatusBadge.style.display = 'inline-block';
+      els.logStatusBadge.className = 'badge badge-warning';
+      els.logStatusBadge.textContent = '🔒 試合中無効';
+    } else {
+      els.logStatusBadge.style.display = 'none';
+    }
+  }
 
   // Game Hook
   if (s.hooked) {

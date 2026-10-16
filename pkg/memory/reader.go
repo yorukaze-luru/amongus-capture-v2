@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"amongus-capture-v2/pkg/config"
 )
 
 // GameListener defines callbacks for game events
@@ -1153,8 +1155,10 @@ func (gr *GameReader) extractPlayerInfoFromData(mr *MemoryReader, playerPtr uint
 		}
 	}
 
-	log.Printf("[GameReader:PlayerInfo] #%d (%s, %s): IsDead=%v (IsDead_RawByte=0x%02X at +0x%X), Role=%s/%s (Role_RawInt=%d, TeamType=%d, IsImpostor=%v), State=%s, Addr=0x%X",
-		pID, name, color.String(), isDead, isDeadRaw, deadOffset, roleName, roleNameJa, roleRawVal, roleTeamType, isImpostor, curState.String(), targetPlayerInfoPtr)
+	if config.IsDebugMode() {
+		log.Printf("[GameReader:PlayerInfo] #%d (%s, %s): IsDead=%v (IsDead_RawByte=0x%02X at +0x%X), Role=%s/%s (Role_RawInt=%d, TeamType=%d, IsImpostor=%v), State=%s, Addr=0x%X",
+			pID, name, color.String(), isDead, isDeadRaw, deadOffset, roleName, roleNameJa, roleRawVal, roleTeamType, isImpostor, curState.String(), targetPlayerInfoPtr)
+	}
 
 	return PlayerInfo{
 		PlayerID:       pID,
