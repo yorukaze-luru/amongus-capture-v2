@@ -179,3 +179,87 @@ func TestFindMatch_ExplicitOnly(t *testing.T) {
 		t.Errorf("expected unmapped user to return empty, got %s (%s)", unmappedName, unmappedColor)
 	}
 }
+
+func TestResolveTargetVoiceState_GhostChatInTasks(t *testing.T) {
+	cfgMgr := config.NewConfigManager()
+	gr := memory.NewGameReader(nil)
+	bot := NewDiscordBot(cfgMgr, gr)
+	defer bot.Stop()
+
+	pRed := memory.PlayerInfo{Name: "Tanaka", Color: memory.ColorRed, IsDead: true}    // Killed during tasks (仮死状態 initially)
+	pBlue := memory.PlayerInfo{Name: "Sato", Color: memory.ColorBlue, IsDead: false}  // Alive (生存状態)
+	pGreen := memory.PlayerInfo{Name: "Suzuki", Color: memory.ColorGreen, IsDead: false}
+
+	statusMap := map[string]memory.PlayerInfo{
+		"red":    pRed,
+		"tanaka": pRed,
+		"blue":   pBlue,
+		"sato":   pBlue,
+		"green":  pGreen,
+		"suzuki": pGreen,
+	}
+
+	// 1. Round 1 Tasks: Red is killed during tasks -> Pseudo-dead (仮死状態)
+	// Red must remain Muted & Deafened (cannot speak, cannot hear)
+	mute, deaf, ok := bot.resolveTargetVoiceState(memory.StateTasks, "Red", statusMap)
+	if !ok || !mute || !deaf {
+		t.Fatalf("expected pseudo-dead Red in Tasks to be Mute=true, Deaf=true, got Mute=%v, Deaf=%v", mute, deaf)
+	}
+
+	// Alive Blue in Tasks -> Muted & Deafened
+	mute, deaf, ok = bot.resolveTargetVoiceState(memory.StateTasks, "Blue", statusMap)
+	if !ok || !mute || !deaf {
+		t.Fatalf("expected alive Blue in Tasks to be Mute=true, Deaf=true, got Mute=%v, Deaf=%v", mute, deaf)
+	}
+
+	// 2. Discussion starts -> Red transitions from pseudo-dead (仮死状態) to confirmed dead (死亡状態)
+	bot.OnGameStateChanged(memory.StateTasks, memory.StateDiscussion)
+	bot.confirmDeadPlayers([]memory.PlayerInfo{pRed, pBlue, pGreen})
+
+	// In Discussion: Confirmed dead Red is Muted (mic off), Undeafened (can listen)
+	mute, deaf, ok = bot.resolveTargetVoiceState(memory.StateDiscussion, "Red", statusMap)
+	if !ok || !mute || deaf {
+		t.Fatalf("expected confirmed dead Red in Discussion to be Mute=true, Deaf=false, got Mute=%v, Deaf=%v", mute, deaf)
+	}
+
+	// In Discussion: Alive Blue is Unmuted & Undeafened
+	mute, deaf, ok = bot.resolveTargetVoiceState(memory.StateDiscussion, "Blue", statusMap)
+	if !ok || mute || deaf {
+		t.Fatalf("expected alive Blue in Discussion to be Mute=false, Deaf=false, got Mute=%v, Deaf=%v", mute, deaf)
+	}
+
+	// 3. Round 2 Tasks starts (and Green is voted out / exiled at end of Discussion)
+	bot.OnGameStateChanged(memory.StateDiscussion, memory.StateTasks)
+	pGreen.IsDead = true
+	statusMap["green"] = pGreen
+	statusMap["suzuki"] = pGreen
+	// Simulate exile occurring right after Discussion -> Tasks transition
+	if bot.isInExileWindow() {
+		bot.confirmDeadPlayers([]memory.PlayerInfo{pRed, pBlue, pGreen})
+	}
+
+	// In Round 2 Tasks: Confirmed dead Red & Exiled Green are Unmuted & Undeafened (can talk with other ghosts!)
+	mute, deaf, ok = bot.resolveTargetVoiceState(memory.StateTasks, "Red", statusMap)
+	if !ok || mute || deaf {
+		t.Fatalf("expected confirmed dead Red in Tasks to be Mute=false, Deaf=false (ghost chat), got Mute=%v, Deaf=%v", mute, deaf)
+	}
+	mute, deaf, ok = bot.resolveTargetVoiceState(memory.StateTasks, "Green", statusMap)
+	if !ok || mute || deaf {
+		t.Fatalf("expected exiled Green in Tasks to be Mute=false, Deaf=false (ghost chat), got Mute=%v, Deaf=%v", mute, deaf)
+	}
+
+	// Meanwhile, Alive Blue in Round 2 Tasks is Muted & Deafened (cannot hear ghostsRed/Green talking!)
+	mute, deaf, ok = bot.resolveTargetVoiceState(memory.StateTasks, "Blue", statusMap)
+	if !ok || !mute || !deaf {
+		t.Fatalf("expected alive Blue in Tasks to be Mute=true, Deaf=true, got Mute=%v, Deaf=%v", mute, deaf)
+	}
+
+	// If Blue is killed mid-Tasks (outside exile window), Blue is in pseudo-death (仮死状態) -> still Muted & Deafened!
+	pBlue.IsDead = true
+	statusMap["blue"] = pBlue
+	statusMap["sato"] = pBlue
+	mute, deaf, ok = bot.resolveTargetVoiceState(memory.StateTasks, "Blue", statusMap)
+	if !ok || !mute || !deaf {
+		t.Fatalf("expected newly killed pseudo-dead Blue in Tasks to stay Mute=true, Deaf=true, got Mute=%v, Deaf=%v", mute, deaf)
+	}
+}

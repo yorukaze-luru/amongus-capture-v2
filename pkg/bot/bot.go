@@ -68,9 +68,10 @@ type DiscordBot struct {
 	embedUpdateChan chan struct{}
 	stopEmbedWorker chan struct{}
 
-	// Game death confirmation (tracks deaths confirmed during discussions)
-	deadMu        sync.RWMutex
-	confirmedDead map[string]bool // keys: lowercase color name & player name
+	// Game death confirmation (tracks deaths confirmed during discussions / exiles)
+	deadMu                sync.RWMutex
+	confirmedDead         map[string]bool // keys: lowercase color name & player name
+	lastDiscussionEndTime time.Time
 }
 
 // NewDiscordBot creates a new self-hosted bot instance
@@ -127,6 +128,22 @@ func (b *DiscordBot) resetConfirmedDead() {
 	b.deadMu.Lock()
 	defer b.deadMu.Unlock()
 	b.confirmedDead = make(map[string]bool)
+	b.lastDiscussionEndTime = time.Time{}
+}
+
+func (b *DiscordBot) markDiscussionEnded() {
+	b.deadMu.Lock()
+	defer b.deadMu.Unlock()
+	b.lastDiscussionEndTime = time.Now()
+}
+
+func (b *DiscordBot) isInExileWindow() bool {
+	b.deadMu.RLock()
+	defer b.deadMu.RUnlock()
+	if b.lastDiscussionEndTime.IsZero() {
+		return false
+	}
+	return time.Since(b.lastDiscussionEndTime) <= 7*time.Second
 }
 
 // AddListener registers a bot event listener
@@ -586,50 +603,9 @@ func (b *DiscordBot) ApplyGameStateToVoice(state memory.GameState, players []mem
 		// Find which in-game player this user corresponds to
 		matchedName, _ := findMatch(userID, username, displayName, cfg.PlayerMappings, players)
 
-		var targetMute, targetDeaf bool
-
-		// If user is NOT participating in the game (unmatched spectator/listener):
-		// NEVER mute them! Keep them unmuted and undeafened at all times.
-		if matchedName == "" {
-			targetMute = false
-			targetDeaf = false
-		} else {
-			// Determine if this in-game player is dead or disconnected
-			isDead := false
-			if p, ok := playerStatusMap[strings.ToLower(matchedName)]; ok {
-				isDead = p.IsDead || p.Disconnected || b.isConfirmedDead(matchedName) || b.isConfirmedDead(p.Name) || b.isConfirmedDead(p.Color.String())
-			} else if b.isConfirmedDead(matchedName) {
-				isDead = true
-			}
-
-			switch state {
-			case memory.StateMenu, memory.StateLobby, memory.StateEnded:
-				// Lobby / Menu / GameOver: Everyone unmuted & undeafened
-				targetMute = false
-				targetDeaf = false
-
-			case memory.StateTasks:
-				// Tasks:
-				// タスク中: 全員ミュート＆スピーカーミュート（死亡者も仮死状態としてミュート維持）
-				targetMute = true
-				targetDeaf = true
-
-			case memory.StateDiscussion:
-				// Discussion / Meeting:
-				// Alive players: Unmuted & Undeafened (can discuss)
-				// Dead players: Muted (cannot interrupt discussion, but can listen)
-				if isDead {
-					targetMute = true
-					targetDeaf = false
-				} else {
-					targetMute = false
-					targetDeaf = false
-				}
-
-			default:
-				// Unknown / Default: don't alter
-				continue
-			}
+		targetMute, targetDeaf, shouldApply := b.resolveTargetVoiceState(state, matchedName, playerStatusMap)
+		if !shouldApply {
+			continue
 		}
 
 		// Only send API request if state differs to save rate limits
@@ -646,6 +622,52 @@ func (b *DiscordBot) ApplyGameStateToVoice(state memory.GameState, players []mem
 	}
 
 	wg.Wait()
+}
+
+func (b *DiscordBot) resolveTargetVoiceState(state memory.GameState, matchedName string, playerStatusMap map[string]memory.PlayerInfo) (targetMute bool, targetDeaf bool, shouldApply bool) {
+	// If user is NOT participating in the game (unmatched spectator/listener):
+	// NEVER mute them! Keep them unmuted and undeafened at all times.
+	if matchedName == "" {
+		return false, false, true
+	}
+
+	// Determine if this in-game player is confirmed dead (死亡状態) vs pseudo-dead (仮死状態)
+	confirmedDead := b.isConfirmedDead(matchedName)
+	isDead := confirmedDead
+	if p, ok := playerStatusMap[strings.ToLower(matchedName)]; ok {
+		if b.isConfirmedDead(p.Name) || b.isConfirmedDead(p.Color.String()) {
+			confirmedDead = true
+		}
+		isDead = p.IsDead || p.Disconnected || confirmedDead
+	}
+
+	switch state {
+	case memory.StateMenu, memory.StateLobby, memory.StateEnded:
+		// Lobby / Menu / GameOver: Everyone unmuted & undeafened
+		return false, false, true
+
+	case memory.StateTasks:
+		// Tasks:
+		// Confirmed dead players (死亡状態・幽霊): Unmuted & Undeafened (幽霊同士で会話可能)
+		// Alive players & Pseudo-dead players (生存者・仮死状態): Muted & Deafened (ミュート維持・幽霊の声も聞こえない)
+		if confirmedDead {
+			return false, false, true
+		}
+		return true, true, true
+
+	case memory.StateDiscussion:
+		// Discussion / Meeting:
+		// Alive players: Unmuted & Undeafened (can discuss)
+		// Dead players: Muted (cannot interrupt discussion, but can listen)
+		if isDead {
+			return true, false, true
+		}
+		return false, false, true
+
+	default:
+		// Unknown / Default: don't alter
+		return false, false, false
+	}
 }
 
 func (b *DiscordBot) embedUpdateWorker() {
@@ -988,7 +1010,7 @@ func (b *DiscordBot) buildRealtimeStatusEmbed() *discordgo.MessageEmbed {
 
 	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 		Name:   "💡 ボイスチャンネル制御",
-		Value:  "• タスク中: 全員 Mute & Deaf (死亡者も仮死ミュート) ｜ 議論中: 生存者は会話可能 / 死亡者は聞き専\n• ※ 未登録メンバー（観戦）は常時ミュート解除されます。",
+		Value:  "• タスク中: 生存・仮死は Mute & Deaf / 幽霊(死亡確定)は会話可能 ｜ 議論中: 生存者は会話可能 / 死亡者は聞き専\n• ※ 未登録メンバー（観戦）は常時ミュート解除されます。",
 		Inline: false,
 	})
 
@@ -1021,9 +1043,13 @@ func (b *DiscordBot) OnGameStateChanged(oldState, newState memory.GameState) {
 	// State-specific death tracking:
 	// - Lobby / Menu / GameOver: reset confirmed deaths
 	// - Discussion: confirm all currently dead players (transition from pseudo-death to dead)
+	// - Discussion -> Tasks: confirm any player exiled at the end of discussion
 	if newState == memory.StateLobby || newState == memory.StateMenu || newState == memory.StateEnded {
 		b.resetConfirmedDead()
 	} else if newState == memory.StateDiscussion {
+		b.confirmDeadPlayers(players)
+	} else if oldState == memory.StateDiscussion && newState == memory.StateTasks {
+		b.markDiscussionEnded()
 		b.confirmDeadPlayers(players)
 	}
 
@@ -1065,13 +1091,32 @@ func (b *DiscordBot) OnGameStateChanged(oldState, newState memory.GameState) {
 				b.UpdateStatusEmbed()
 			}
 		}()
+	} else if oldState == memory.StateDiscussion && newState == memory.StateTasks {
+		// When transitioning from Discussion to Tasks (ejection animation),
+		// run follow-up checks to catch the exiled player whose IsDead flag is set during ExileController.WrapUp
+		go func() {
+			for _, delay := range []time.Duration{500 * time.Millisecond, 1000 * time.Millisecond, 1500 * time.Millisecond, 1500 * time.Millisecond, 1500 * time.Millisecond} {
+				time.Sleep(delay)
+				b.mu.RLock()
+				connected := b.connected
+				b.mu.RUnlock()
+				if !connected || b.gr == nil {
+					return
+				}
+				if b.gr.GetCurrentState() != memory.StateTasks || !b.isInExileWindow() {
+					return
+				}
+				latestPlayers := b.gr.GetSnapshotPlayers()
+				b.confirmDeadPlayers(latestPlayers)
+				b.ApplyGameStateToVoice(memory.StateTasks, latestPlayers)
+				b.RefreshVoiceMembers()
+				b.UpdateStatusEmbed()
+			}
+		}()
 	}
 }
 
 func (b *DiscordBot) OnPlayerChanged(event memory.PlayerChangeEvent) {
-	if !b.IsConnected() {
-		return
-	}
 	// If a player died during tasks/discussion, reapply
 	if event.Action == memory.ActionDied || event.Action == memory.ActionExiled {
 		var players []memory.PlayerInfo
@@ -1082,13 +1127,17 @@ func (b *DiscordBot) OnPlayerChanged(event memory.PlayerChangeEvent) {
 		if b.gr != nil {
 			state = b.gr.GetCurrentState()
 		}
-		if state == memory.StateDiscussion {
+		if state == memory.StateDiscussion || event.Action == memory.ActionExiled || (state == memory.StateTasks && b.isInExileWindow()) {
 			b.confirmDeadPlayers(players)
 		}
-		b.ApplyGameStateToVoice(state, players)
-		b.RefreshVoiceMembers()
+		if b.IsConnected() {
+			b.ApplyGameStateToVoice(state, players)
+			b.RefreshVoiceMembers()
+		}
 	}
-	b.UpdateStatusEmbed()
+	if b.IsConnected() {
+		b.UpdateStatusEmbed()
+	}
 }
 
 func (b *DiscordBot) OnLobbyUpdated(event memory.LobbyEvent) {
