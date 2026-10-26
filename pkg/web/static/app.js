@@ -409,8 +409,11 @@ function updateUI(s) {
     }
   }
 
-  if (s.version && els.appVersion) {
-    els.appVersion.textContent = s.version;
+  if (s.version) {
+    if (els.appVersion) {
+      els.appVersion.textContent = s.version;
+    }
+    document.title = `AmongUsCapture ${s.version} - Dedicated Client`;
   }
   const wasBotConnected = state.botConnected;
   state.hooked = s.hooked;
@@ -769,5 +772,9 @@ window.addEventListener('pagehide', () => {
 });
 
 // Initialize on Load
+fetch('/api/status', { cache: 'no-store' })
+  .then((r) => r.json())
+  .then((s) => updateUI(s))
+  .catch(() => {});
 connectWS();
 

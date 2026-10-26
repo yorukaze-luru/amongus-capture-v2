@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "2.2.21"
+  #define MyAppVersion "2.2.22"
 #endif
 
 #define MyAppName "AmongUsCapture v2"

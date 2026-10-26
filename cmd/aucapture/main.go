@@ -460,11 +460,12 @@ func killDuplicateInstances() {
 		return
 	}
 	myPID := os.Getpid()
-	execPath, err := os.Executable()
+	execPath, err := version.CanonicalExecutablePath()
 	if err != nil {
 		return
 	}
 	baseName := filepath.Base(execPath)
+	oldBaseName := baseName + ".old"
 
 	modKernel32 := windows.NewLazySystemDLL("kernel32.dll")
 	procCreateToolhelp32Snapshot := modKernel32.NewProc("CreateToolhelp32Snapshot")
@@ -503,7 +504,7 @@ func killDuplicateInstances() {
 	for ret != 0 {
 		if entry.ProcessID != uint32(myPID) {
 			pName := windows.UTF16ToString(entry.ExeFile[:])
-			if strings.EqualFold(pName, baseName) {
+			if strings.EqualFold(pName, baseName) || strings.EqualFold(pName, oldBaseName) {
 				hProc, _, _ := procOpenProcess.Call(PROCESS_TERMINATE, 0, uintptr(entry.ProcessID))
 				if hProc != 0 {
 					procTerminateProcess.Call(hProc, 0)
@@ -556,12 +557,12 @@ func enableKillOnCloseJob() {
 	}
 
 	type JOBOBJECT_EXTENDED_LIMIT_INFORMATION struct {
-		BasicLimitInformation JOBOBJECT_BASIC_LIMIT_INFORMATION
-		IoInfo                IO_COUNTERS
-		ProcessMemoryLimit    uintptr
-		JobMemoryLimit        uintptr
+		BasicLimitInformation  JOBOBJECT_BASIC_LIMIT_INFORMATION
+		IoInfo                 IO_COUNTERS
+		ProcessMemoryLimit     uintptr
+		JobMemoryLimit         uintptr
 		PeakProcessMemoryLimit uintptr
-		PeakJobMemoryLimit    uintptr
+		PeakJobMemoryLimit     uintptr
 	}
 
 	var info JOBOBJECT_EXTENDED_LIMIT_INFORMATION
@@ -595,12 +596,9 @@ func openBrowser(url string) {
 }
 
 func restartUpdatedProcess(oldVersion, newVersion string) {
-	exePath, err := os.Executable()
+	exePath, err := version.CanonicalExecutablePath()
 	if err != nil {
 		return
-	}
-	if resolved, err := filepath.EvalSymlinks(exePath); err == nil {
-		exePath = resolved
 	}
 
 	cmd := exec.Command(exePath, os.Args[1:]...)
@@ -611,7 +609,5 @@ func restartUpdatedProcess(oldVersion, newVersion string) {
 		return
 	}
 	log.Printf("[AutoUpdate] Launched updated binary (%s, PID: %d). Exiting old process...", newVersion, cmd.Process.Pid)
-	os.Exit(0)
+	exitProcessImmediate(0)
 }
-
-

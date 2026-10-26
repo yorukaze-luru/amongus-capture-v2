@@ -43,16 +43,29 @@ var (
 	checkOnce    sync.Once
 )
 
+// CanonicalExecutablePath returns the resolved path to the main executable,
+// stripping any ".old" suffix that Windows may report after an in-place rename.
+func CanonicalExecutablePath() (string, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(exePath); err == nil {
+		exePath = resolved
+	}
+	for strings.HasSuffix(strings.ToLower(exePath), ".old") {
+		exePath = exePath[:len(exePath)-4]
+	}
+	return exePath, nil
+}
+
 // CleanupOldBinary removes any leftover .old or .new files from a previous self-update
 func CleanupOldBinary() {
 	SyncInstalledVersionRegistry()
 
-	exePath, err := os.Executable()
+	exePath, err := CanonicalExecutablePath()
 	if err != nil {
 		return
-	}
-	if resolved, err := filepath.EvalSymlinks(exePath); err == nil {
-		exePath = resolved
 	}
 
 	oldPath := exePath + ".old"
@@ -252,12 +265,9 @@ func CheckAndApplyStartupUpdate() (bool, string, error) {
 		return false, info.LatestVersion, nil
 	}
 
-	exePath, err := os.Executable()
+	exePath, err := CanonicalExecutablePath()
 	if err != nil {
 		return false, info.LatestVersion, err
-	}
-	if resolved, err := filepath.EvalSymlinks(exePath); err == nil {
-		exePath = resolved
 	}
 
 	log.Printf("[AutoUpdate] New version detected (%s -> %s). Downloading %s...", CurrentVersion, info.LatestVersion, info.DownloadURL)
