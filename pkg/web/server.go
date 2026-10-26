@@ -425,7 +425,7 @@ func (ws *WebServer) handleBotStart(w http.ResponseWriter, r *http.Request) {
 		voiceCID = cfg.DiscordVoiceCID
 	}
 	statusCID := strings.TrimSpace(req.StatusCID)
-	if statusCID == "" && req.GuildID == "" {
+	if statusCID == "" {
 		statusCID = cfg.DiscordStatusCID
 	}
 

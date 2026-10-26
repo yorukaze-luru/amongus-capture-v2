@@ -90,7 +90,8 @@ const (
 	ColorBanana    PlayerColor = 14
 	ColorGray      PlayerColor = 15
 	ColorTan       PlayerColor = 16
-	ColorSunset    PlayerColor = 17
+	ColorCoral     PlayerColor = 17
+	ColorSunset    PlayerColor = 17 // Alias for backwards compatibility
 	ColorUnknown   PlayerColor = 255
 )
 
@@ -112,7 +113,7 @@ var ColorNames = map[PlayerColor]string{
 	ColorBanana: "Banana",
 	ColorGray:   "Gray",
 	ColorTan:    "Tan",
-	ColorSunset: "Sunset",
+	ColorCoral:  "Coral",
 }
 
 var ColorHex = map[PlayerColor]string{
@@ -133,7 +134,7 @@ var ColorHex = map[PlayerColor]string{
 	ColorBanana: "#fffebe",
 	ColorGray:   "#708496",
 	ColorTan:    "#928776",
-	ColorSunset: "#ec7570",
+	ColorCoral:  "#d76464",
 }
 
 var ColorEmojis = map[PlayerColor]string{
@@ -154,7 +155,7 @@ var ColorEmojis = map[PlayerColor]string{
 	ColorBanana: "🍌",
 	ColorGray:   "🐘",
 	ColorTan:    "🪵",
-	ColorSunset: "🌅",
+	ColorCoral:  "🌺",
 }
 
 func (c PlayerColor) String() string {
@@ -181,6 +182,9 @@ func (c PlayerColor) Emoji() string {
 // ParseColorByName converts a color name (case-insensitive) to PlayerColor
 func ParseColorByName(name string) PlayerColor {
 	trimmed := strings.TrimSpace(name)
+	if strings.EqualFold(trimmed, "Coral") || trimmed == "コーラル" || strings.EqualFold(trimmed, "Sunset") || trimmed == "サンセット" {
+		return ColorCoral
+	}
 	for c, n := range ColorNames {
 		if strings.EqualFold(n, trimmed) {
 			return c

@@ -72,6 +72,9 @@ type DiscordBot struct {
 	deadMu                sync.RWMutex
 	confirmedDead         map[string]bool // keys: lowercase color name & player name
 	lastDiscussionEndTime time.Time
+
+	transitionMu  sync.Mutex
+	transitionSeq uint64
 }
 
 // NewDiscordBot creates a new self-hosted bot instance
@@ -195,6 +198,7 @@ func (b *DiscordBot) Start(ctx context.Context, token, guildID, voiceCID, status
 	// Event Handlers
 	dg.AddHandler(b.handleVoiceStateUpdate)
 	dg.AddHandler(b.handleReady)
+	dg.AddHandler(b.handleGuildCreate)
 	dg.AddHandler(b.handleInteractionCreate)
 
 	err = dg.Open()
@@ -226,12 +230,15 @@ func (b *DiscordBot) Start(ctx context.Context, token, guildID, voiceCID, status
 	b.notifyStatus(true, username, "")
 	b.notifyLog(fmt.Sprintf("Discord Bot (%s) がオンラインになりました！", username), "success")
 
-	// Initial Voice channel refresh, Slash command cleanup/sync, and Status Embed post
+	// Initial Voice channel refresh and Status Embed post immediately (without blocking on slash command cleanup)
 	go func() {
-		time.Sleep(500 * time.Millisecond)
-		b.cleanAndSyncSlashCommands(dg, guildID)
+		time.Sleep(200 * time.Millisecond)
 		b.RefreshVoiceMembers()
 		b.UpdateStatusEmbed()
+	}()
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		b.cleanAndSyncSlashCommands(dg, guildID)
 	}()
 
 	return nil
@@ -288,6 +295,31 @@ func (b *DiscordBot) handleReady(s *discordgo.Session, r *discordgo.Ready) {
 	b.mu.Unlock()
 	log.Printf("[DiscordBot] Ready as %s#%s (ID: %s)", r.User.Username, r.User.Discriminator, r.User.ID)
 	b.notifyStatus(true, r.User.Username, "")
+	b.RefreshVoiceMembers()
+	b.UpdateStatusEmbed()
+}
+
+func (b *DiscordBot) handleGuildCreate(s *discordgo.Session, g *discordgo.GuildCreate) {
+	if g == nil || g.Guild == nil {
+		return
+	}
+	b.mu.Lock()
+	targetGuildID := b.guildID
+	voiceCID := b.voiceCID
+	if g.Guild.ID == targetGuildID && voiceCID != "" {
+		for _, vs := range g.Guild.VoiceStates {
+			if vs != nil && vs.ChannelID == voiceCID {
+				copyVS := *vs
+				b.voiceMembers[vs.UserID] = &copyVS
+			}
+		}
+	}
+	b.mu.Unlock()
+
+	if g.Guild.ID == targetGuildID {
+		b.RefreshVoiceMembers()
+		b.UpdateStatusEmbed()
+	}
 }
 
 func (b *DiscordBot) handleVoiceStateUpdate(s *discordgo.Session, v *discordgo.VoiceStateUpdate) {
@@ -404,6 +436,42 @@ func (b *DiscordBot) SetChannels(guildID, voiceCID, statusCID string) {
 	go b.cleanAndSyncSlashCommands(s, newGuildID)
 }
 
+// getVoiceStatesInChannel returns all current voice states in the active voice channel,
+// merging Discord Gateway state cache and local voice state tracking.
+func (b *DiscordBot) getVoiceStatesInChannel() []*discordgo.VoiceState {
+	b.mu.RLock()
+	s := b.session
+	guildID := b.guildID
+	voiceCID := b.voiceCID
+	merged := make(map[string]*discordgo.VoiceState, len(b.voiceMembers))
+	for uid, vs := range b.voiceMembers {
+		if vs != nil && vs.ChannelID == voiceCID {
+			cp := *vs
+			merged[uid] = &cp
+		}
+	}
+	b.mu.RUnlock()
+
+	if s == nil || guildID == "" || voiceCID == "" {
+		return nil
+	}
+
+	if guild, err := s.State.Guild(guildID); err == nil && guild != nil {
+		for _, vs := range guild.VoiceStates {
+			if vs != nil && vs.ChannelID == voiceCID {
+				cp := *vs
+				merged[vs.UserID] = &cp
+			}
+		}
+	}
+
+	res := make([]*discordgo.VoiceState, 0, len(merged))
+	for _, vs := range merged {
+		res = append(res, vs)
+	}
+	return res
+}
+
 // RefreshVoiceMembers queries voice channel members and dispatches to listeners
 func (b *DiscordBot) RefreshVoiceMembers() {
 	b.mu.RLock()
@@ -416,14 +484,7 @@ func (b *DiscordBot) RefreshVoiceMembers() {
 		return
 	}
 
-	guild, err := s.State.Guild(guildID)
-	if err != nil {
-		// Try fetching from API if not in state cache
-		guild, err = s.Guild(guildID)
-		if err != nil {
-			return
-		}
-	}
+	voiceStates := b.getVoiceStatesInChannel()
 
 	var membersInVC []VoiceMember
 	cfg := b.cfgMgr.Get()
@@ -432,7 +493,7 @@ func (b *DiscordBot) RefreshVoiceMembers() {
 		inGamePlayers = b.gr.GetSnapshotPlayers()
 	}
 
-	for _, vs := range guild.VoiceStates {
+	for _, vs := range voiceStates {
 		if vs.ChannelID == voiceCID {
 			var member *discordgo.Member
 			if vs.Member != nil {
@@ -512,6 +573,31 @@ func (b *DiscordBot) UpdateUserMuteState(userID string, mute, deaf bool) error {
 	}
 
 	_, err := s.RequestWithBucketID("PATCH", discordgo.EndpointGuildMember(guildID, userID), data, discordgo.EndpointGuildMember(guildID, ""))
+	if err == nil {
+		// Immediately sync local voice state cache so subsequent transition steps see the updated state
+		b.mu.Lock()
+		if vs, ok := b.voiceMembers[userID]; ok && vs != nil {
+			vs.Mute = mute
+			vs.Deaf = deaf
+		}
+		b.mu.Unlock()
+
+		if s.State != nil {
+			s.State.Lock()
+			for _, g := range s.State.Guilds {
+				if g.ID == guildID {
+					for _, vs := range g.VoiceStates {
+						if vs != nil && vs.UserID == userID {
+							vs.Mute = mute
+							vs.Deaf = deaf
+						}
+					}
+					break
+				}
+			}
+			s.State.Unlock()
+		}
+	}
 	return err
 }
 
@@ -522,35 +608,20 @@ func (b *DiscordBot) UnmuteUser(userID string) error {
 
 // UnmuteAll removes server mute and server deafen from all users in the active voice channel
 func (b *DiscordBot) UnmuteAll() {
-	b.mu.RLock()
-	s := b.session
-	guildID := b.guildID
-	voiceCID := b.voiceCID
-	b.mu.RUnlock()
-
-	if s == nil || guildID == "" || voiceCID == "" {
-		return
+	voiceStates := b.getVoiceStatesInChannel()
+	var wg sync.WaitGroup
+	for _, vs := range voiceStates {
+		wg.Add(1)
+		go func(uid string) {
+			defer wg.Done()
+			_ = b.UpdateUserMuteState(uid, false, false)
+		}(vs.UserID)
 	}
-
-	guild, err := s.State.Guild(guildID)
-	if err != nil {
-		guild, err = s.Guild(guildID)
-		if err != nil {
-			return
-		}
-	}
-
-	for _, vs := range guild.VoiceStates {
-		if vs.ChannelID == voiceCID {
-			go func(uid string) {
-				_ = b.UpdateUserMuteState(uid, false, false)
-			}(vs.UserID)
-		}
-	}
+	wg.Wait()
 }
 
-// ApplyGameStateToVoice automates muting / unmuting based on Among Us game state
-func (b *DiscordBot) ApplyGameStateToVoice(state memory.GameState, players []memory.PlayerInfo) {
+// MuteAllParticipants puts all participating players in the active voice channel into muted state (Step 1 of phase transitions)
+func (b *DiscordBot) MuteAllParticipants(players []memory.PlayerInfo) {
 	b.mu.RLock()
 	s := b.session
 	guildID := b.guildID
@@ -562,13 +633,66 @@ func (b *DiscordBot) ApplyGameStateToVoice(state memory.GameState, players []mem
 	}
 
 	cfg := b.cfgMgr.Get()
-	guild, err := s.State.Guild(guildID)
-	if err != nil {
-		guild, err = s.Guild(guildID)
-		if err != nil {
-			return
+	voiceStates := b.getVoiceStatesInChannel()
+
+	var wg sync.WaitGroup
+	for _, vs := range voiceStates {
+		if vs.ChannelID != voiceCID {
+			continue
 		}
+
+		userID := vs.UserID
+		var member *discordgo.Member
+		if vs.Member != nil {
+			member = vs.Member
+		} else if m, err := s.State.Member(guildID, userID); err == nil && m != nil {
+			member = m
+		}
+		displayName := userID
+		username := userID
+		if member != nil && member.User != nil {
+			displayName = member.DisplayName()
+			username = member.User.Username
+		}
+
+		matchedName, _ := findMatch(userID, username, displayName, cfg.PlayerMappings, players)
+		if matchedName == "" {
+			// Spectators remain unmuted
+			continue
+		}
+
+		wg.Add(1)
+		go func(uid string) {
+			defer wg.Done()
+			err := b.UpdateUserMuteState(uid, true, true)
+			if err != nil {
+				log.Printf("[DiscordBot] Failed to mute participant %s in transition Step 1: %v", uid, err)
+			}
+		}(userID)
 	}
+
+	wg.Wait()
+}
+
+// ApplyGameStateToVoice automates muting / unmuting based on Among Us game state
+func (b *DiscordBot) ApplyGameStateToVoice(state memory.GameState, players []memory.PlayerInfo) {
+	b.ApplyGameStateToVoiceWithOptions(state, players, false)
+}
+
+// ApplyGameStateToVoiceWithOptions applies target mute/deaf states to all VC members (force=true sends API requests regardless of cached state)
+func (b *DiscordBot) ApplyGameStateToVoiceWithOptions(state memory.GameState, players []memory.PlayerInfo, force bool) {
+	b.mu.RLock()
+	s := b.session
+	guildID := b.guildID
+	voiceCID := b.voiceCID
+	b.mu.RUnlock()
+
+	if s == nil || guildID == "" || voiceCID == "" {
+		return
+	}
+
+	cfg := b.cfgMgr.Get()
+	voiceStates := b.getVoiceStatesInChannel()
 
 	// Build map of Game player status
 	playerStatusMap := make(map[string]memory.PlayerInfo)
@@ -581,7 +705,7 @@ func (b *DiscordBot) ApplyGameStateToVoice(state memory.GameState, players []mem
 
 	var wg sync.WaitGroup
 
-	for _, vs := range guild.VoiceStates {
+	for _, vs := range voiceStates {
 		if vs.ChannelID != voiceCID {
 			continue
 		}
@@ -608,8 +732,8 @@ func (b *DiscordBot) ApplyGameStateToVoice(state memory.GameState, players []mem
 			continue
 		}
 
-		// Only send API request if state differs to save rate limits
-		if vs.Mute != targetMute || vs.Deaf != targetDeaf {
+		// Send API request if forced (major state transition) or if state differs from cached voice state
+		if force || vs.Mute != targetMute || vs.Deaf != targetDeaf {
 			wg.Add(1)
 			go func(uid string, m, d bool) {
 				defer wg.Done()
@@ -735,7 +859,11 @@ func (b *DiscordBot) executeUpdateStatusEmbed() {
 		Components: components,
 	})
 	if err != nil {
-		log.Printf("[DiscordBot] Failed to send status embed to channel %s: %v", statusCID, err)
+		log.Printf("[DiscordBot] Failed to send status embed to channel %s: %v. Retrying in 1s...", statusCID, err)
+		go func() {
+			time.Sleep(1 * time.Second)
+			b.UpdateStatusEmbed()
+		}()
 		return
 	}
 
@@ -814,20 +942,18 @@ func (b *DiscordBot) buildRealtimeStatusEmbed() *discordgo.MessageEmbed {
 
 	var vcMembers []VoiceMember
 	if s != nil && guildID != "" && voiceCID != "" {
-		if guild, err := s.State.Guild(guildID); err == nil {
-			for _, vs := range guild.VoiceStates {
-				if vs.ChannelID == voiceCID {
-					displayName := vs.UserID
-					if vs.Member != nil {
-						displayName = vs.Member.DisplayName()
-					} else if m, err := s.State.Member(guildID, vs.UserID); err == nil && m != nil {
-						displayName = m.DisplayName()
-					}
-					vcMembers = append(vcMembers, VoiceMember{
-						UserID:      vs.UserID,
-						DisplayName: displayName,
-					})
+		for _, vs := range b.getVoiceStatesInChannel() {
+			if vs.ChannelID == voiceCID {
+				displayName := vs.UserID
+				if vs.Member != nil {
+					displayName = vs.Member.DisplayName()
+				} else if m, err := s.State.Member(guildID, vs.UserID); err == nil && m != nil {
+					displayName = m.DisplayName()
 				}
+				vcMembers = append(vcMembers, VoiceMember{
+					UserID:      vs.UserID,
+					DisplayName: displayName,
+				})
 			}
 		}
 	}
@@ -1034,6 +1160,19 @@ func (b *DiscordBot) SetPlayerMapping(key, userID string) {
 
 // GameListener implementations
 
+func (b *DiscordBot) nextTransitionSeq() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.transitionSeq++
+	return b.transitionSeq
+}
+
+func (b *DiscordBot) getTransitionSeq() uint64 {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.transitionSeq
+}
+
 func (b *DiscordBot) OnGameStateChanged(oldState, newState memory.GameState) {
 	var players []memory.PlayerInfo
 	if b.gr != nil {
@@ -1042,9 +1181,12 @@ func (b *DiscordBot) OnGameStateChanged(oldState, newState memory.GameState) {
 
 	// State-specific death tracking:
 	// - Lobby / Menu / GameOver: reset confirmed deaths
+	// - Start of a new match (non-Discussion -> Tasks): reset confirmed deaths so previous match never leaks
 	// - Discussion: confirm all currently dead players (transition from pseudo-death to dead)
 	// - Discussion -> Tasks: confirm any player exiled at the end of discussion
 	if newState == memory.StateLobby || newState == memory.StateMenu || newState == memory.StateEnded {
+		b.resetConfirmedDead()
+	} else if newState == memory.StateTasks && oldState != memory.StateDiscussion {
 		b.resetConfirmedDead()
 	} else if newState == memory.StateDiscussion {
 		b.confirmDeadPlayers(players)
@@ -1057,63 +1199,104 @@ func (b *DiscordBot) OnGameStateChanged(oldState, newState memory.GameState) {
 		return
 	}
 
-	b.notifyLog(fmt.Sprintf("[DiscordBot] ゲーム状態変化: %s ➔ VC自動ミュート適用中...", newState.String()), "info")
-	b.ApplyGameStateToVoice(newState, players)
-
-	// Ensure all members are unmuted when entering Lobby, Menu, or GameOver
-	if newState == memory.StateLobby || newState == memory.StateMenu || newState == memory.StateEnded {
-		b.UnmuteAll()
-	}
-
-	b.RefreshVoiceMembers()
+	seq := b.nextTransitionSeq()
 	b.UpdateStatusEmbed()
 
-	// When entering Discussion (Emergency Meeting or Body Reported),
-	// run follow-up checks at 300ms, 800ms, and 1500ms to catch any players
-	// whose death was confirmed while the meeting screen was loading!
-	if newState == memory.StateDiscussion {
-		go func() {
-			for _, delay := range []time.Duration{300 * time.Millisecond, 800 * time.Millisecond, 1500 * time.Millisecond} {
+	go func(sOld, sNew memory.GameState, initPlayers []memory.PlayerInfo, mySeq uint64) {
+		b.transitionMu.Lock()
+		defer b.transitionMu.Unlock()
+
+		if b.getTransitionSeq() != mySeq || !b.IsConnected() {
+			return
+		}
+
+		latestPlayers := initPlayers
+		if b.gr != nil {
+			latestPlayers = b.gr.GetSnapshotPlayers()
+		}
+
+		if sOld == memory.StateTasks && sNew == memory.StateDiscussion {
+			// Transition: TASKS -> DISCUSSION
+			// Step 1: 一度全員をミュート状態にする (Mute all participants first so ghosts don't leak into discussion)
+			b.notifyLog("[DiscordBot] タスク ➔ 議論移行: 一度全員をミュート状態にしています...", "info")
+			b.MuteAllParticipants(latestPlayers)
+
+			time.Sleep(250 * time.Millisecond)
+			if b.getTransitionSeq() != mySeq || !b.IsConnected() {
+				return
+			}
+			if b.gr != nil {
+				latestPlayers = b.gr.GetSnapshotPlayers()
+			}
+			b.confirmDeadPlayers(latestPlayers)
+
+			// Step 2: 生存者だけミュート解除（死者はマイクミュート）
+			b.notifyLog("[DiscordBot] 議論開始: 生存者のみミュート解除（死者はマイクミュート）を適用中...", "info")
+			b.ApplyGameStateToVoiceWithOptions(memory.StateDiscussion, latestPlayers, true)
+		} else if sOld == memory.StateDiscussion && sNew == memory.StateTasks {
+			// Transition: DISCUSSION -> TASKS
+			// Step 1: いったん全員ミュートにする (Mute all participants first)
+			b.notifyLog("[DiscordBot] 議論 ➔ タスク移行: いったん全員をミュート状態にしています...", "info")
+			b.MuteAllParticipants(latestPlayers)
+
+			time.Sleep(250 * time.Millisecond)
+			if b.getTransitionSeq() != mySeq || !b.IsConnected() {
+				return
+			}
+			if b.gr != nil {
+				latestPlayers = b.gr.GetSnapshotPlayers()
+			}
+			b.confirmDeadPlayers(latestPlayers)
+
+			// Step 2: 死者はミュート解除（生存者はミュートのまま）
+			b.notifyLog("[DiscordBot] タスク再開: 死者のみミュート解除（生存者はミュートのまま）を適用中...", "info")
+			b.ApplyGameStateToVoiceWithOptions(memory.StateTasks, latestPlayers, false)
+		} else if sNew == memory.StateLobby || sNew == memory.StateMenu || sNew == memory.StateEnded {
+			// Lobby / Menu / GameOver: Unmute everyone
+			b.notifyLog(fmt.Sprintf("[DiscordBot] ゲーム状態変化: %s ➔ 全員ミュート解除中...", sNew.String()), "info")
+			b.ApplyGameStateToVoiceWithOptions(sNew, latestPlayers, true)
+		} else {
+			// Match start (Lobby -> Tasks, etc.): Force mute all participants
+			b.notifyLog(fmt.Sprintf("[DiscordBot] ゲーム状態変化: %s ➔ VC自動ミュート適用中...", sNew.String()), "info")
+			b.ApplyGameStateToVoiceWithOptions(sNew, latestPlayers, true)
+		}
+
+		b.RefreshVoiceMembers()
+		b.UpdateStatusEmbed()
+
+		// Follow-up checks for delayed death flags (body report loading or ejection animation)
+		if sNew == memory.StateDiscussion {
+			for _, delay := range []time.Duration{400 * time.Millisecond, 900 * time.Millisecond} {
 				time.Sleep(delay)
-				b.mu.RLock()
-				connected := b.connected
-				b.mu.RUnlock()
-				if !connected || b.gr == nil {
+				if b.getTransitionSeq() != mySeq || !b.IsConnected() || b.gr == nil {
 					return
 				}
 				if b.gr.GetCurrentState() != memory.StateDiscussion {
 					return
 				}
-				latestPlayers := b.gr.GetSnapshotPlayers()
-				b.confirmDeadPlayers(latestPlayers)
-				b.ApplyGameStateToVoice(memory.StateDiscussion, latestPlayers)
+				p := b.gr.GetSnapshotPlayers()
+				b.confirmDeadPlayers(p)
+				b.ApplyGameStateToVoice(memory.StateDiscussion, p)
 				b.RefreshVoiceMembers()
 				b.UpdateStatusEmbed()
 			}
-		}()
-	} else if oldState == memory.StateDiscussion && newState == memory.StateTasks {
-		// When transitioning from Discussion to Tasks (ejection animation),
-		// run follow-up checks to catch the exiled player whose IsDead flag is set during ExileController.WrapUp
-		go func() {
+		} else if sOld == memory.StateDiscussion && sNew == memory.StateTasks {
 			for _, delay := range []time.Duration{500 * time.Millisecond, 1000 * time.Millisecond, 1500 * time.Millisecond, 1500 * time.Millisecond, 1500 * time.Millisecond} {
 				time.Sleep(delay)
-				b.mu.RLock()
-				connected := b.connected
-				b.mu.RUnlock()
-				if !connected || b.gr == nil {
+				if b.getTransitionSeq() != mySeq || !b.IsConnected() || b.gr == nil {
 					return
 				}
 				if b.gr.GetCurrentState() != memory.StateTasks || !b.isInExileWindow() {
 					return
 				}
-				latestPlayers := b.gr.GetSnapshotPlayers()
-				b.confirmDeadPlayers(latestPlayers)
-				b.ApplyGameStateToVoice(memory.StateTasks, latestPlayers)
+				p := b.gr.GetSnapshotPlayers()
+				b.confirmDeadPlayers(p)
+				b.ApplyGameStateToVoice(memory.StateTasks, p)
 				b.RefreshVoiceMembers()
 				b.UpdateStatusEmbed()
 			}
-		}()
-	}
+		}
+	}(oldState, newState, players, seq)
 }
 
 func (b *DiscordBot) OnPlayerChanged(event memory.PlayerChangeEvent) {
@@ -1131,8 +1314,10 @@ func (b *DiscordBot) OnPlayerChanged(event memory.PlayerChangeEvent) {
 			b.confirmDeadPlayers(players)
 		}
 		if b.IsConnected() {
-			b.ApplyGameStateToVoice(state, players)
-			b.RefreshVoiceMembers()
+			go func(st memory.GameState, pl []memory.PlayerInfo) {
+				b.ApplyGameStateToVoice(st, pl)
+				b.RefreshVoiceMembers()
+			}(state, players)
 		}
 	}
 	if b.IsConnected() {
@@ -1151,14 +1336,6 @@ func (b *DiscordBot) OnGameOver(event memory.GameOverEvent) {
 	if !b.IsConnected() {
 		return
 	}
-	var players []memory.PlayerInfo
-	if b.gr != nil {
-		players = b.gr.GetSnapshotPlayers()
-	}
-	b.notifyLog("[DiscordBot] 試合終了検知 (GAME OVER) ➔ 全員ミュート解除中...", "info")
-	b.ApplyGameStateToVoice(memory.StateEnded, players)
-	b.UnmuteAll()
-	b.RefreshVoiceMembers()
 	b.UpdateStatusEmbed()
 }
 
@@ -1292,7 +1469,7 @@ func (b *DiscordBot) buildColorSelectComponents() []discordgo.MessageComponent {
 		{"Banana", "バナナ"},
 		{"Gray", "グレー"},
 		{"Tan", "タン"},
-		{"Sunset", "サンセット"},
+		{"Coral", "コーラル"},
 	}
 
 	for _, c := range colors {

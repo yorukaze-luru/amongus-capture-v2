@@ -124,6 +124,13 @@ func main() {
 	// 4. Initialize Self-Hosted Discord Bot
 	discordBot := bot.NewDiscordBot(cfgMgr, gameReader)
 	globalDiscordBot = discordBot
+	if strings.TrimSpace(cfg.DiscordBotToken) != "" {
+		go func(token, gID, vCID, sCID string) {
+			if err := discordBot.Start(ctx, token, gID, vCID, sCID); err != nil {
+				log.Printf("[Main] Auto-start Discord Bot error: %v", err)
+			}
+		}(cfg.DiscordBotToken, cfg.DiscordGuildID, cfg.DiscordVoiceCID, cfg.DiscordStatusCID)
+	}
 
 	// Handle OS Signals (SIGINT, SIGTERM)
 	sigChan := make(chan os.Signal, 1)

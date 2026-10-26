@@ -50,6 +50,7 @@ type GameReader struct {
 
 	lastStateLogTime time.Time
 	lastRawVal       int32
+	matchStartTime   time.Time
 
 	cachedAmongUsClientInst uintptr
 	cachedGameDataInst       uintptr
@@ -159,19 +160,34 @@ func (gr *GameReader) tick() {
 		return
 	}
 
+	// Upgrade to exact hash offsets if remote refresh completed after initial hook
+	if proc.GameHash != "" && gr.offsetManager != nil {
+		if exact := gr.offsetManager.GetOffsetByHash(proc.GameHash); exact != nil && exact != offsets {
+			gr.mu.Lock()
+			gr.offsets = exact
+			offsets = exact
+			gr.mu.Unlock()
+		}
+	}
+
 	base := proc.GameAssemblyBase
 
-	// 1. Poll Game State (MENU, LOBBY, TASKS, DISCUSSION, GAME_OVER)
-	gr.pollGameState(mr, base, offsets, sigs)
-
-	// 2. Poll Lobby Info
+	// 1. Poll Lobby Info
 	gr.pollLobby(mr, base, offsets, sigs)
 
-	// 3. Poll Players (PlayerControl.AllPlayerControls list tracking)
+	// 2. Poll Game State (MENU, LOBBY, TASKS, DISCUSSION, GAME_OVER)
+	stateChanged, oldState, newState := gr.pollGameState(mr, base, offsets, sigs)
+
+	// 3. Poll Players (PlayerControl.AllPlayerControls / GameData.Instance.AllPlayers)
 	gr.pollPlayers(mr, base, offsets, sigs)
 
-	// 4. Poll Game Over
-	gr.pollGameOver(mr, base, offsets)
+	// 4. Dispatch State Change & GameOver once after players are updated for the new state
+	if stateChanged {
+		gr.notifyStateChange(oldState, newState)
+		if newState == StateGameOver {
+			gr.pollGameOver(mr, base, offsets)
+		}
+	}
 }
 
 func (gr *GameReader) isHooked() bool {
@@ -279,16 +295,21 @@ func (gr *GameReader) verifyProcess() error {
 }
 
 // pollGameState reads and determines the current GameState
-func (gr *GameReader) pollGameState(mr *MemoryReader, base uintptr, offsets *GameOffsets, sigs ScannedPointers) {
+func (gr *GameReader) pollGameState(mr *MemoryReader, base uintptr, offsets *GameOffsets, sigs ScannedPointers) (bool, GameState, GameState) {
 	newState, rawVal, readAddr := gr.readRawGameState(mr, base, offsets, sigs)
 
+	now := time.Now()
 	gr.mu.Lock()
 	oldState := gr.currentState
 	stateChanged := newState != oldState
 	if stateChanged {
 		gr.currentState = newState
+		if newState == StateTasks && oldState != StateDiscussion {
+			gr.matchStartTime = now
+		} else if newState == StateLobby || newState == StateMenu || newState == StateGameOver {
+			gr.matchStartTime = time.Time{}
+		}
 	}
-	now := time.Now()
 	shouldLogHeartbeat := now.Sub(gr.lastStateLogTime) >= 1200*time.Millisecond
 	if shouldLogHeartbeat {
 		gr.lastStateLogTime = now
@@ -298,38 +319,23 @@ func (gr *GameReader) pollGameState(mr *MemoryReader, base uintptr, offsets *Gam
 	playerCount := len(gr.currentPlayers)
 	gr.mu.Unlock()
 
-	// 1. If state changed, immediately dispatch event and log prominently
 	if stateChanged {
-		gr.notifyStateChange(oldState, newState)
 		log.Printf("[GameReader:GameState] ★★★ 状態変化検知: %s (%d) -> %s (%d) [rawValue=%d, Addr=0x%X, Lobby=%s, Players=%d] ★★★",
 			oldState.String(), int(oldState), newState.String(), int(newState), rawVal, readAddr, lobby, playerCount)
 		gr.debugLog("STATE", "warn", "GameState変化検知: %s (%d) -> %s (%d) [rawValue=%d, Addr=0x%X]",
 			oldState.String(), int(oldState), newState.String(), int(newState), rawVal, readAddr)
-	} else if shouldLogHeartbeat {
-		// 2. Periodic debug log for requirements: rawValue confirmation
+	} else if shouldLogHeartbeat && config.IsDebugMode() {
 		log.Printf("[GameReader:GameState] 生メモリ監視: rawValue = %d (ステート: %s (%d), 読取Addr: 0x%X, ロビー: %s, 人数: %d)",
 			rawVal, newState.String(), int(newState), readAddr, lobby, playerCount)
 		gr.debugLog("STATE", "info", "生メモリ値: rawValue = %d (ステート: %s, ロビー: %s)",
 			rawVal, newState.String(), lobby)
 	}
+
+	return stateChanged, oldState, newState
 }
 
-// resolveAmongUsClientInstance resolves and caches the AmongUsClient.Instance singleton pointer
+// resolveAmongUsClientInstance resolves the live AmongUsClient.Instance singleton pointer directly from static_fields
 func (gr *GameReader) resolveAmongUsClientInstance(mr *MemoryReader, base uintptr, offsets *GameOffsets) (uintptr, error) {
-	gr.mu.RLock()
-	cached := gr.cachedAmongUsClientInst
-	gr.mu.RUnlock()
-
-	if cached != 0 {
-		classPtr, err := mr.ReadPtr(cached)
-		if err == nil && classPtr > base && classPtr < base+0x20000000 {
-			return cached, nil
-		}
-		gr.mu.Lock()
-		gr.cachedAmongUsClientInst = 0
-		gr.mu.Unlock()
-	}
-
 	clientOffset := offsets.AmongUsClientOffset
 	if clientOffset == 0 && len(offsets.GameStateOffsets) > 0 {
 		clientOffset = offsets.GameStateOffsets[0]
@@ -359,31 +365,19 @@ func (gr *GameReader) resolveAmongUsClientInstance(mr *MemoryReader, base uintpt
 	}
 
 	gr.mu.Lock()
+	prev := gr.cachedAmongUsClientInst
 	gr.cachedAmongUsClientInst = inst
 	gr.mu.Unlock()
 
-	log.Printf("[GameReader] Successfully resolved and cached AmongUsClient.Instance at 0x%X", inst)
-	gr.debugLog("OFFSET", "success", "AmongUsClient.Instance解決・キャッシュ: 0x%X", inst)
+	if prev != inst {
+		log.Printf("[GameReader] Resolved live AmongUsClient.Instance at 0x%X", inst)
+		gr.debugLog("OFFSET", "success", "AmongUsClient.Instance解決: 0x%X", inst)
+	}
 	return inst, nil
 }
 
-// resolveGameDataInstance resolves and caches the GameData.Instance singleton pointer
+// resolveGameDataInstance resolves the live GameData.Instance singleton pointer directly from static_fields
 func (gr *GameReader) resolveGameDataInstance(mr *MemoryReader, base uintptr, offsets *GameOffsets) (uintptr, error) {
-	gr.mu.RLock()
-	cached := gr.cachedGameDataInst
-	gr.mu.RUnlock()
-
-	if cached != 0 {
-		classPtr, err := mr.ReadPtr(cached)
-		if err == nil && classPtr > base && classPtr < base+0x20000000 {
-			return cached, nil
-		}
-		gr.mu.Lock()
-		gr.cachedGameDataInst = 0
-		gr.cachedAllPlayersListAddr = 0
-		gr.mu.Unlock()
-	}
-
 	dataOffset := offsets.GameDataOffset
 	if dataOffset == 0 && len(offsets.AllPlayerPtrOffsets) > 0 {
 		dataOffset = offsets.AllPlayerPtrOffsets[0]
@@ -413,12 +407,51 @@ func (gr *GameReader) resolveGameDataInstance(mr *MemoryReader, base uintptr, of
 	}
 
 	gr.mu.Lock()
+	prev := gr.cachedGameDataInst
 	gr.cachedGameDataInst = inst
 	gr.mu.Unlock()
 
-	log.Printf("[GameReader] Successfully resolved and cached GameData.Instance at 0x%X", inst)
-	gr.debugLog("OFFSET", "success", "GameData.Instance解決・キャッシュ: 0x%X", inst)
+	if prev != inst {
+		log.Printf("[GameReader] Resolved live GameData.Instance at 0x%X", inst)
+		gr.debugLog("OFFSET", "success", "GameData.Instance解決: 0x%X", inst)
+	}
 	return inst, nil
+}
+
+// isGameStartManagerActive checks if GameStartManager.Instance is currently alive in the Unity scene (Lobby)
+func (gr *GameReader) isGameStartManagerActive(mr *MemoryReader, base uintptr, offsets *GameOffsets) bool {
+	gsmOffset := offsets.GameStartManagerOffset
+	if gsmOffset == 0 && len(offsets.GameCodeOffsets) > 0 {
+		gsmOffset = offsets.GameCodeOffsets[0]
+	}
+	if gsmOffset == 0 {
+		return false
+	}
+
+	classPtr, err := mr.ReadPtr(base + uintptr(gsmOffset))
+	if err != nil || classPtr == 0 {
+		return false
+	}
+
+	var staticOffset uintptr = 0xB8
+	var cacheOffset uintptr = 0x10
+	if !mr.is64 {
+		staticOffset = 0x5C
+		cacheOffset = 0x8
+	}
+
+	staticFields, err := mr.ReadPtr(classPtr + staticOffset)
+	if err != nil || staticFields == 0 || staticFields < 0x10000 {
+		return false
+	}
+
+	gsmInst, err := mr.ReadPtr(staticFields + 0x0)
+	if err != nil || gsmInst == 0 || gsmInst < 0x10000 {
+		return false
+	}
+
+	cachedPtr, err := mr.ReadPtr(gsmInst + cacheOffset)
+	return err == nil && cachedPtr > 0x10000
 }
 
 // readRawGameState reads GameState from memory using AmongUsClient.Instance and official offsets
@@ -441,6 +474,7 @@ func (gr *GameReader) readRawGameState(mr *MemoryReader, base uintptr, offsets *
 
 	// Check MeetingHud for discussion phase
 	meetingActive := gr.isMeetingActive(mr, base, offsets, sigs)
+	lobbyManagerActive := gr.isGameStartManagerActive(mr, base, offsets)
 
 	gr.mu.RLock()
 	prev := gr.currentState
@@ -462,13 +496,17 @@ func (gr *GameReader) readRawGameState(mr *MemoryReader, base uintptr, offsets *
 		} else {
 			derivedState = StateTasks
 		}
-	case 3:
-		derivedState = StateGameOver
-	case 4:
-		derivedState = StateGameOver
+	case 3, 4:
+		// If GameStartManager is active in scene, player has already clicked "Play Again" and returned to Lobby
+		if lobbyManagerActive {
+			derivedState = StateLobby
+		} else {
+			derivedState = StateGameOver
+		}
 	case 0:
-		// When in room or in match, rawVal=0 may be transient before AmongUsClient initializes fully
-		if hasLobbyCode || hasPlayers {
+		if lobbyManagerActive {
+			derivedState = StateLobby
+		} else if hasLobbyCode || hasPlayers {
 			if prev == StateTasks || prev == StateDiscussion {
 				if meetingActive {
 					derivedState = StateDiscussion
@@ -485,6 +523,8 @@ func (gr *GameReader) readRawGameState(mr *MemoryReader, base uintptr, offsets *
 		// When rawVal could not be read directly
 		if meetingActive {
 			derivedState = StateDiscussion
+		} else if lobbyManagerActive {
+			derivedState = StateLobby
 		} else if hasLobbyCode || hasPlayers {
 			if prev == StateTasks || prev == StateDiscussion {
 				derivedState = StateTasks
@@ -531,7 +571,7 @@ func (gr *GameReader) isMeetingActive(mr *MemoryReader, base uintptr, offsets *G
 	}
 
 	// 0 = Discussion, 1 = NotVoted, 2 = Voted, 3 = Results, 4 = Proceeding
-	return meetingState < 4
+	return meetingState >= 0 && meetingState < 4
 }
 
 // pollLobby reads game room code, region, and map
@@ -639,6 +679,14 @@ func (gr *GameReader) pollPlayers(mr *MemoryReader, base uintptr, offsets *GameO
 					Color:        newP.Color,
 				})
 				gr.debugLog("PLAYER", "danger", "死亡: %s (ID: %d, 色: %s)", newP.Name, id, newP.Color.String())
+			} else if oldP.IsDead && !newP.IsDead {
+				gr.notifyPlayer(PlayerChangeEvent{
+					Action:       ActionForceUpdated,
+					Name:         newP.Name,
+					IsDead:       false,
+					Disconnected: newP.Disconnected,
+					Color:        newP.Color,
+				})
 			}
 			if oldP.Color != newP.Color {
 				gr.notifyPlayer(PlayerChangeEvent{
@@ -987,11 +1035,17 @@ func (gr *GameReader) extractPlayerInfoFromData(mr *MemoryReader, playerPtr uint
 		}
 	}
 
-	// Logical state guard: When in LOBBY, players are ALWAYS alive (IsDead = false)
+	// Logical state guard:
+	// 1. When in LOBBY, players are ALWAYS alive (IsDead = false).
+	// 2. When a new match just started from Lobby (first 5 seconds of StateTasks during the "SHHH!" intro screen),
+	//    ignore leftover IsDead=1 flags from the previous match until RoleManager.SelectRoles resets them.
 	gr.mu.RLock()
 	curState := gr.currentState
+	matchStart := gr.matchStartTime
 	gr.mu.RUnlock()
 	if curState == StateLobby {
+		isDead = false
+	} else if curState == StateTasks && !matchStart.IsZero() && time.Since(matchStart) < 5*time.Second {
 		isDead = false
 	}
 

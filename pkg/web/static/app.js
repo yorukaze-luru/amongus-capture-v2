@@ -80,11 +80,12 @@ const colorMap = {
   Banana: { hex: '#fffe9d', label: '🍌 Banana (バナナ)' },
   Gray: { hex: '#708496', label: '🐘 Gray (グレー)' },
   Tan: { hex: '#928776', label: '🪵 Tan (タン)' },
-  Sunset: { hex: '#dc6565', label: '🌅 Sunset (サンセット)' },
+  Coral: { hex: '#d76464', label: '🌺 Coral (コーラル)' },
 };
 
 function getColorInfo(name) {
   if (!name) return { hex: '#888', label: 'Unknown' };
+  if (name === 'Sunset') return colorMap.Coral;
   return colorMap[name] || { hex: '#888', label: name };
 }
 
@@ -411,6 +412,7 @@ function updateUI(s) {
   if (s.version && els.appVersion) {
     els.appVersion.textContent = s.version;
   }
+  const wasBotConnected = state.botConnected;
   state.hooked = s.hooked;
   state.gameState = s.gameState;
   state.lobbyCode = s.lobbyCode;
@@ -419,9 +421,11 @@ function updateUI(s) {
   state.botUsername = s.botUsername;
   state.voiceMembers = s.voiceMembers || [];
   state.playerMappings = s.playerMappings || {};
-  state.selectedGuildId = s.guildId || '';
-  state.selectedVoiceCId = s.voiceCId || '';
-  state.selectedStatusCId = s.statusCId || '';
+  if (document.activeElement !== els.selectGuild && document.activeElement !== els.selectVC && document.activeElement !== els.selectStatusChannel) {
+    state.selectedGuildId = s.guildId || '';
+    state.selectedVoiceCId = s.voiceCId || '';
+    state.selectedStatusCId = s.statusCId || '';
+  }
   state.lastMatchResult = s.lastMatchResult || null;
   state.debugMode = !!s.debugMode;
 
@@ -469,9 +473,6 @@ function updateUI(s) {
   if (els.gameState) els.gameState.textContent = stateName;
 
   // Bot Status
-  const wasBotConnected = state.botConnected;
-  state.botConnected = s.botConnected;
-
   if (s.botConnected) {
     els.botStatusText.textContent = `● Bot 稼働中`;
     els.botStatusText.className = 'tile-value text-success';
@@ -493,6 +494,10 @@ function updateUI(s) {
     els.btnBotToggle.disabled = false;
     els.overallBadge.textContent = 'STANDBY';
     els.overallBadge.className = 'badge badge-warning';
+    els.selectGuild.disabled = true;
+    els.selectVC.disabled = true;
+    els.selectStatusChannel.disabled = true;
+    els.btnApplyVC.disabled = true;
   }
 
   if (s.botToken && (!els.botTokenInput.value || document.activeElement !== els.botTokenInput)) {
