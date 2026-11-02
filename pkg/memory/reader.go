@@ -63,7 +63,7 @@ func NewGameReader(om *OffsetManager) *GameReader {
 		offsetManager:  om,
 		currentState:   StateMenu, // Default to MENU, avoiding UNKNOWN
 		currentPlayers: make(map[byte]PlayerInfo),
-		pollInterval:   150 * time.Millisecond,
+		pollInterval:   50 * time.Millisecond,
 		stopChan:       make(chan struct{}),
 	}
 }
